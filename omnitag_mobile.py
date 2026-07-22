@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.3 (Solución de Guardado de Configuración Local en Modo .EXE Standalone)
+Versión: 4.0.4 (Corrección IMEI Android 10+ con com.android.shell & Auto-Updater Thread-Safe)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,13 +28,12 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.3"
+CURRENT_VERSION = "v4.0.4"
 GITHUB_REPO = "MicaelCedano/OmniTagMobile"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 # --- Determinación de Rutas (Modo Script vs Modo PyInstaller .EXE) ---
 if getattr(sys, 'frozen', False):
-    # En ejecutable .exe, la carpeta de trabajo real es donde está el .exe
     script_dir = os.path.dirname(os.path.abspath(sys.executable))
     bundle_dir = getattr(sys, '_MEIPASS', script_dir)
 else:
@@ -44,7 +43,6 @@ else:
 CONFIG_FILE_NAME = os.path.join(script_dir, "etiqueta_config.json")
 EXCEL_FILE_NAME = os.path.join(script_dir, "plantilla_compra_iphone.xlsx")
 
-# Buscar fuentes primero en script_dir, luego en bundle_dir de PyInstaller
 def _get_asset_path(filename):
     local_p = os.path.join(script_dir, filename)
     if os.path.exists(local_p): return local_p
@@ -364,23 +362,31 @@ def cargar_fuentes_pdf():
     except Exception:
         RL_FONT_REGULAR_NAME = 'Helvetica'
 
-# --- Extraer IMEI en Android ---
+# --- Extraer IMEI en Android (Android 10, 11, 12, 13, 14, 15) ---
 def obtener_imei_android(dev):
-    cmd_list = [
-        "cmd phone get-imei",
-        "cmd phone get-imei 0",
-        "cmd phone get-imei 1",
-        "cmd phone get-device-id"
-    ]
-    for cmd in cmd_list:
+    """
+    Extrae el IMEI real de 15 dígitos utilizando el contexto de la app shell (com.android.shell)
+    para evitar SecurityException en Android 10+.
+    """
+    # 1. Service call iphonesubinfo pasando com.android.shell
+    for code in [1, 2, 3, 4, 5, 7, 8, 9, 10]:
         try:
-            res = dev.shell(cmd).strip()
-            digits = "".join([c for c in res if c.isdigit()])
-            if len(digits) >= 14:
-                return digits[:15]
+            out = dev.shell(f'service call iphonesubinfo {code} s16 "com.android.shell"')
+            if "Result: Parcel" in out:
+                hex_parts = re.findall(r"([0-9a-fA-F]{8})", out)
+                decoded_chars = []
+                for part in hex_parts[2:]:
+                    c1 = chr(int(part[2:4], 16))
+                    c2 = chr(int(part[6:8], 16))
+                    if c1.isdigit(): decoded_chars.append(c1)
+                    if c2.isdigit(): decoded_chars.append(c2)
+                digits = "".join(decoded_chars)
+                if len(digits) >= 14:
+                    return digits[:15]
         except Exception: pass
 
-    for code in [1, 2, 3, 4, 7]:
+    # 2. Service call iphonesubinfo estándar
+    for code in [1, 2, 3, 4]:
         try:
             out = dev.shell(f"service call iphonesubinfo {code}")
             if "Result: Parcel" in out:
@@ -396,32 +402,35 @@ def obtener_imei_android(dev):
                     return digits[:15]
         except Exception: pass
 
-    for code in [1, 2, 3, 4, 7]:
+    # 3. Comandos cmd phone
+    cmd_list = [
+        'cmd phone get-imei 0 s16 "com.android.shell"',
+        'cmd phone get-imei 1 s16 "com.android.shell"',
+        'cmd phone get-imei',
+        'cmd phone get-device-id'
+    ]
+    for cmd in cmd_list:
         try:
-            out = dev.shell(f"service call iphonesubinfo {code}")
-            matches = re.findall(r"\'([^\']+)\'", out)
-            if matches:
-                combined = "".join(matches)
-                digits = "".join([c for c in combined if c.isdigit()])
-                if len(digits) >= 14:
-                    return digits[:15]
+            res = dev.shell(cmd).strip()
+            digits = "".join([c for c in res if c.isdigit()])
+            if len(digits) >= 14:
+                return digits[:15]
         except Exception: pass
 
-    try:
-        out = dev.shell("dumpsys iphonesubinfo")
-        match = re.search(r"(?:Device ID|IMEI|imei)\s*=\s*(\d{14,15})", out)
-        if match: return match.group(1)
-    except Exception: pass
+    # 4. Dumpsys iphonesubinfo / dumpsys telephony.registry
+    for d_cmd in ["dumpsys iphonesubinfo", "dumpsys telephony.registry"]:
+        try:
+            out = dev.shell(d_cmd)
+            matches = re.findall(r"(?:mImei|mDeviceId|IMEI|imei)\s*[=:]\s*(\d{14,15})", out)
+            for m in matches:
+                if len(m) >= 14:
+                    return m[:15]
+        except Exception: pass
 
-    try:
-        out = dev.shell("dumpsys telephony.registry")
-        match = re.search(r"(?:mImei|mDeviceId)=(\d{14,15})", out)
-        if match: return match.group(1)
-    except Exception: pass
-
+    # 5. Propiedades de sistema (getprop)
     props = [
         "gsm.baseband.imei", "ril.imei", "ril.IMEI", 
-        "ro.ril.oem_imei", "persist.radio.imei", "gsm.imei1", "gsm.imei"
+        "ro.ril.oem_imei", "persist.radio.imei", "gsm.imei1", "gsm.imei", "ril.serialnumber"
     ]
     for prop in props:
         try:
@@ -816,7 +825,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title("OmniTag Mobile v4.0.3 - Detección Multimarca & Etiquetas")
+        self.title("OmniTag Mobile v4.0.4 - Detección Multimarca & Etiquetas")
         self.geometry("1300x720")
         self.minsize(1200, 620)
         self.configure(fg_color=COLOR_BG_DARK)
@@ -1378,7 +1387,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         if self.auto_print_var.get():
             self.after(500, self.imprimir)
 
-    # --- Lógica de Auto-Update desde GitHub Releases ---
+    # --- Lógica de Auto-Update Thread-Safe ---
     def check_updates_async(self):
         def check():
             try:
@@ -1412,42 +1421,62 @@ class OmniTagMobileApp(customtkinter.CTk):
         try:
             progress_win = customtkinter.CTkToplevel(self)
             progress_win.title("Descargando Actualización...")
-            progress_win.geometry("400x150")
+            progress_win.geometry("420x160")
             progress_win.attributes("-topmost", True)
             
             lbl = customtkinter.CTkLabel(progress_win, text="Descargando OmniTagMobile.exe desde GitHub...", font=("Segoe UI", 12))
-            lbl.pack(pady=20)
+            lbl.pack(pady=(20, 10))
             
-            pbar = customtkinter.CTkProgressBar(progress_win, width=300)
+            pbar = customtkinter.CTkProgressBar(progress_win, width=320)
             pbar.pack(pady=10)
-            pbar.set(0.3)
+            pbar.set(0.1)
             
             def download_worker():
-                temp_dir = tempfile.gettempdir()
-                new_exe_path = os.path.join(temp_dir, "OmniTagMobile_new.exe")
-                urllib.request.urlretrieve(download_url, new_exe_path)
-                pbar.set(1.0)
-                
-                updater_bat = os.path.join(temp_dir, "update_omnitag.bat")
-                current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
-                
-                bat_script = f"""@echo off
+                try:
+                    temp_dir = tempfile.gettempdir()
+                    new_exe_path = os.path.join(temp_dir, "OmniTagMobile_new.exe")
+                    
+                    def hook(count, block_size, total_size):
+                        if total_size > 0:
+                            fraction = min(1.0, (count * block_size) / total_size)
+                            self.after(0, lambda f=fraction: pbar.set(f))
+
+                    urllib.request.urlretrieve(download_url, new_exe_path, reporthook=hook)
+                    self.after(0, lambda: self.finalizar_actualizacion(progress_win, new_exe_path))
+                except Exception as e_dl:
+                    self.after(0, lambda err=e_dl: self.error_actualizacion(progress_win, err))
+
+            threading.Thread(target=download_worker, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Error de Actualización", f"No se pudo iniciar la actualización:\n{e}")
+
+    def error_actualizacion(self, progress_win, err):
+        try: progress_win.destroy()
+        except: pass
+        messagebox.showerror("Error de Actualización", f"Falló la descarga de la nueva versión:\n{err}")
+
+    def finalizar_actualizacion(self, progress_win, new_exe_path):
+        try: progress_win.destroy()
+        except: pass
+        
+        current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
+        temp_dir = tempfile.gettempdir()
+        updater_bat = os.path.join(temp_dir, "update_omnitag.bat")
+        
+        bat_script = f"""@echo off
 timeout /t 2 /nobreak > NUL
 copy /y "{new_exe_path}" "{current_exe}"
 start "" "{current_exe}"
 del "{new_exe_path}"
 del "%~f0"
 """
-                with open(updater_bat, "w") as f:
-                    f.write(bat_script)
-                
-                messagebox.showinfo("Actualización Lista", "La nueva versión ha sido descargada. La aplicación se reiniciará automáticamente.")
-                subprocess.Popen(["cmd.exe", "/c", updater_bat], shell=True)
-                sys.exit(0)
-
-            threading.Thread(target=download_worker, daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Error de Actualización", f"No se pudo completar la actualización automática:\n{e}")
+        with open(updater_bat, "w") as f:
+            f.write(bat_script)
+            
+        messagebox.showinfo("Actualización Lista", "La actualización se ha descargado correctamente.\nEl programa se cerrará y se reiniciará con la nueva versión.")
+        
+        subprocess.Popen(["cmd.exe", "/c", updater_bat], shell=True)
+        self.on_closing()
 
 if __name__ == "__main__":
     customtkinter.set_appearance_mode("dark")
