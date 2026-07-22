@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.4 (Corrección IMEI Android 10+ con com.android.shell & Auto-Updater Thread-Safe)
+Versión: 4.0.5 (Sistema de Actualización Inline Estilo MCTools & Lectura IMEI Android 10+)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,9 +28,9 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.4"
-GITHUB_REPO = "MicaelCedano/OmniTagMobile"
-GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+CURRENT_VERSION = "v4.0.5"
+REPO_OWNER = "MicaelCedano"
+REPO_NAME = "OmniTagMobile"
 
 # --- Determinación de Rutas (Modo Script vs Modo PyInstaller .EXE) ---
 if getattr(sys, 'frozen', False):
@@ -53,6 +53,18 @@ FONT_REGULAR_PATH_TTF = _get_asset_path("arial.ttf")
 
 RL_FONT_BOLD_NAME = "ArialBoldRegistered"
 RL_FONT_REGULAR_NAME = "ArialRegularRegistered"
+
+LABEL_WIDTH_INCHES = 2.0
+LABEL_HEIGHT_INCHES = 1.0
+PREVIEW_MAX_WIDTH = 380
+
+def parse_version(v_str):
+    """Convierte una cadena de versión tipo '4.0.5' o 'v4.0.5' en una tupla de enteros."""
+    v_clean = re.sub(r'[^0-9.]', '', str(v_str))
+    try:
+        return tuple(map(int, v_clean.split('.')))
+    except Exception:
+        return (0, 0, 0)
 
 # --- Dependencias iOS (pymobiledevice3) ---
 PYMOBILEDEVICE_AVAILABLE = False
@@ -364,10 +376,6 @@ def cargar_fuentes_pdf():
 
 # --- Extraer IMEI en Android (Android 10, 11, 12, 13, 14, 15) ---
 def obtener_imei_android(dev):
-    """
-    Extrae el IMEI real de 15 dígitos utilizando el contexto de la app shell (com.android.shell)
-    para evitar SecurityException en Android 10+.
-    """
     # 1. Service call iphonesubinfo pasando com.android.shell
     for code in [1, 2, 3, 4, 5, 7, 8, 9, 10]:
         try:
@@ -822,12 +830,16 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.current_udid = None
         self.current_device_info = None
         
+        # Variables de Actualización Estilo MCTools
+        self.update_ready = False
+        self.downloaded_new_exe = None
+
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title("OmniTag Mobile v4.0.4 - Detección Multimarca & Etiquetas")
-        self.geometry("1300x720")
-        self.minsize(1200, 620)
+        self.title(f"OmniTag Mobile {CURRENT_VERSION} - Detección Multimarca & Etiquetas")
+        self.geometry("1300x740")
+        self.minsize(1200, 640)
         self.configure(fg_color=COLOR_BG_DARK)
         
         cargar_config_inicial()
@@ -840,8 +852,8 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.grid_columnconfigure(2, weight=1)
 
         # Header Banner
-        self.header_frame = customtkinter.CTkFrame(self, fg_color=COLOR_CARD_BG, corner_radius=12, border_width=1, border_color=COLOR_CARD_BORDER, height=70)
-        self.header_frame.grid(row=0, column=0, columnspan=3, padx=20, pady=(20, 10), sticky="ew")
+        self.header_frame = customtkinter.CTkFrame(self, fg_color=COLOR_CARD_BG, corner_radius=12, border_width=1, border_color=COLOR_CARD_BORDER, height=80)
+        self.header_frame.grid(row=0, column=0, columnspan=3, padx=20, pady=(15, 10), sticky="ew")
         self.header_frame.grid_propagate(False)
         self.header_frame.grid_columnconfigure(0, weight=1)
         self.header_frame.grid_columnconfigure(1, weight=0)
@@ -855,13 +867,35 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Lectura Multimarca (iPhone / Samsung / Pixel) & Control de Inventario Excel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
-        # Badge Estado
-        self.badge_frame = customtkinter.CTkFrame(self.header_frame, fg_color="#334155", corner_radius=18, height=36, border_width=1, border_color="#475569")
-        self.badge_frame.grid(row=0, column=1, padx=20, pady=17, sticky="e")
+        # Header Derecho: Badge Estado + Botón de Actualización
+        right_header_box = customtkinter.CTkFrame(self.header_frame, fg_color="transparent")
+        right_header_box.grid(row=0, column=1, padx=20, pady=12, sticky="e")
+
+        self.badge_frame = customtkinter.CTkFrame(right_header_box, fg_color="#334155", corner_radius=18, height=36, border_width=1, border_color="#475569")
+        self.badge_frame.grid(row=0, column=0, padx=(0, 10))
         self.badge_frame.grid_propagate(False)
         
         self.badge_label = customtkinter.CTkLabel(self.badge_frame, text="Estado: Desconectado ❌", font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#94A3B8", padx=15, pady=0)
         self.badge_label.pack(expand=True, fill="both")
+
+        self.btn_update = customtkinter.CTkButton(
+            right_header_box, 
+            text="Buscar act.", 
+            command=self.accion_boton_actualizacion, 
+            width=120, 
+            height=36, 
+            corner_radius=18, 
+            fg_color="#334155", 
+            hover_color="#475569", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.btn_update.grid(row=0, column=1)
+
+        # Barra de progreso inline para actualización (Estilo MCTools)
+        self.update_progress = customtkinter.CTkProgressBar(self.header_frame, height=4, corner_radius=2, fg_color="#0F172A", progress_color="#06B6D4")
+        self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 2))
+        self.update_progress.set(0)
+        self.update_progress.grid_remove()
 
         # Contenedores Principales
         self.controls_frame = customtkinter.CTkFrame(self, width=320, fg_color=COLOR_CARD_BG, corner_radius=16, border_width=1, border_color=COLOR_CARD_BORDER)
@@ -892,17 +926,188 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.after(100, self.force_preview_update)
         
-        # Verificar Actualizaciones en segundo plano
-        self.after(2000, self.check_updates_async)
+        # Chequeo automático de actualizaciones al iniciar (estilo MCTools)
+        self.after(1500, lambda: self.chequear_actualizaciones_async(manual=False))
 
     def on_closing(self):
-        if self.device_monitor: self.device_monitor.stop()
-        try: guardar_logo_config(self.logo_path_var.get().strip())
-        except Exception: pass
-        finally:
-            cleanup_temp_files()
-            self.destroy()
+        """Intercepta el cierre de la app. Si hay una actualización lista, la aplica al salir."""
+        if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None) and os.path.exists(self.downloaded_new_exe):
+            self.ejecutar_instalacion_inmediata()
+        else:
+            if self.device_monitor: self.device_monitor.stop()
+            try: guardar_logo_config(self.logo_path_var.get().strip())
+            except Exception: pass
+            finally:
+                cleanup_temp_files()
+                try: self.destroy()
+                except Exception: pass
+                os._exit(0)
 
+    # --- Lógica de Auto-Update Estilo MCTools (Inline Progress & Silent VBS/BAT) ---
+    def accion_boton_actualizacion(self):
+        """Maneja el clic en el botón de actualización según su estado."""
+        if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None):
+            self.ejecutar_instalacion_inmediata()
+        else:
+            self.chequear_actualizaciones_async(manual=True)
+
+    def chequear_actualizaciones_async(self, manual=False):
+        """Inicia el chequeo de actualizaciones en un hilo secundario."""
+        if getattr(self, 'update_ready', False): return
+        if manual:
+            self.btn_update.configure(text="Buscando...", fg_color="#334155", state="disabled")
+        
+        thread = threading.Thread(target=self._buscar_actualizaciones_hilo, args=(manual,))
+        thread.daemon = True
+        thread.start()
+
+    def _buscar_actualizaciones_hilo(self, manual):
+        try:
+            url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+            latest_version_tag = data.get("tag_name", "")
+            latest_version = latest_version_tag.lstrip('v')
+            if not any(c.isdigit() for c in latest_version):
+                release_title = data.get("name", "")
+                if release_title:
+                    latest_version_tag = release_title
+                    latest_version = release_title.lstrip('v')
+            
+            current_ver = CURRENT_VERSION.lstrip('v')
+            
+            if parse_version(latest_version) > parse_version(current_ver):
+                assets = data.get("assets", [])
+                exe_url = None
+                for asset in assets:
+                    name = asset.get("name", "")
+                    if name.endswith(".exe"):
+                        exe_url = asset.get("browser_download_url")
+                        break
+                
+                if exe_url and getattr(sys, 'frozen', False):
+                    # Iniciar descarga inline automáticamente
+                    self.after(100, lambda: self.iniciar_descarga_inline(exe_url, latest_version_tag))
+                else:
+                    self.after(100, lambda: self.btn_update.configure(text="¡Nueva v" + latest_version + "!", fg_color="#EF4444", state="normal"))
+            else:
+                self.after(100, lambda: self.btn_update.configure(text="Al día", fg_color="#10B981", state="normal"))
+                if manual:
+                    self.after(200, lambda: messagebox.showinfo("Actualizado", f"Ya tienes la versión más reciente ({CURRENT_VERSION})."))
+        except Exception as e:
+            print(f"Error buscando actualización: {e}")
+            self.after(100, lambda: self.btn_update.configure(text="Buscar act.", fg_color="#334155", state="normal"))
+            if manual:
+                self.after(200, lambda: messagebox.showerror("Error", f"No se pudo buscar actualizaciones:\n{e}"))
+        finally:
+            # Reprogramar cada 15 minutos (900,000 ms)
+            self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
+
+    def iniciar_descarga_inline(self, exe_url, nueva_version_tag):
+        """Inicia la descarga de la nueva versión mostrando la barra de progreso inline."""
+        self.btn_update.configure(text="Descargando 0%", fg_color="#0284C7", state="disabled")
+        self.update_progress.grid()
+        self.update_progress.set(0)
+        
+        thread = threading.Thread(target=self._hilo_descarga_inline, args=(exe_url, nueva_version_tag))
+        thread.daemon = True
+        thread.start()
+
+    def _hilo_descarga_inline(self, exe_url, nueva_version_tag):
+        try:
+            temp_dir = tempfile.gettempdir()
+            new_exe = os.path.join(temp_dir, f"omnitag_update_{int(time.time())}.exe")
+            
+            req = urllib.request.Request(exe_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=45) as response:
+                total_size = int(response.info().get('Content-Length', 0))
+                bytes_downloaded = 0
+                
+                with open(new_exe, 'wb') as f:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk: break
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        
+                        if total_size > 0:
+                            progreso = bytes_downloaded / total_size
+                            porcentaje = int(progreso * 100)
+                            self.after(0, lambda p=progreso, pct=porcentaje: self._actualizar_progreso_inline(p, pct))
+            
+            self.after(0, lambda: self._finalizar_descarga_inline(nueva_version_tag, new_exe))
+        except Exception as e:
+            print(f"Error en descarga inline: {e}")
+            self.after(0, self._error_descarga_inline)
+
+    def _actualizar_progreso_inline(self, progreso, porcentaje):
+        self.update_progress.set(progreso)
+        self.btn_update.configure(text=f"Descargando {porcentaje}%")
+
+    def _finalizar_descarga_inline(self, nueva_version_tag, new_exe):
+        self.update_progress.grid_remove()
+        self.update_ready = True
+        self.downloaded_new_exe = new_exe
+        self.btn_update.configure(
+            text="✨ Instalar ahora", 
+            fg_color="#10B981", 
+            hover_color="#059669", 
+            text_color="#FFFFFF",
+            state="normal"
+        )
+
+    def _error_descarga_inline(self):
+        self.update_progress.grid_remove()
+        self.btn_update.configure(text="Buscar act.", fg_color="#334155", state="normal")
+
+    def ejecutar_instalacion_inmediata(self):
+        """Ejecuta la sustitución del ejecutable e inicia la nueva versión silenciosamente (vbs + bat)."""
+        if not hasattr(self, 'downloaded_new_exe') or not self.downloaded_new_exe or not os.path.exists(self.downloaded_new_exe):
+            messagebox.showerror("Error", "No se encontró el archivo de actualización listo para instalar.")
+            return
+            
+        try:
+            current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+            temp_dir = tempfile.gettempdir()
+            new_exe = self.downloaded_new_exe
+            bat_path = os.path.join(temp_dir, "omnitag_updater.bat")
+            vbs_path = os.path.join(temp_dir, "omnitag_launcher.vbs")
+            
+            exe_basename = os.path.basename(current_exe)
+            bat_lines = [
+                "@echo off",
+                ":wait_exit",
+                "ping 127.0.0.1 -n 2 >nul",
+                f'tasklist /FI "IMAGENAME eq {exe_basename}" 2>nul | find /I "{exe_basename}" >nul',
+                "if not errorlevel 1 goto wait_exit",
+                "ping 127.0.0.1 -n 3 >nul",
+                ":retry_copy",
+                f'copy /Y "{new_exe}" "{current_exe}" >nul 2>&1 || goto retry_copy',
+                "ping 127.0.0.1 -n 2 >nul",
+                f'start "" "{current_exe}"',
+                "ping 127.0.0.1 -n 2 >nul",
+                f'if exist "{vbs_path}" del /F /Q "{vbs_path}" >nul 2>&1',
+                f'if exist "{new_exe}" del /F /Q "{new_exe}" >nul 2>&1',
+                '(goto) 2>nul & del "%~f0" >nul 2>&1'
+            ]
+            
+            with open(bat_path, 'w', encoding='cp1252') as f:
+                f.write("\r\n".join(bat_lines))
+                
+            vbs_code = f'CreateObject("WScript.Shell").Run Chr(34) & "{bat_path}" & Chr(34), 0, False'
+            with open(vbs_path, 'w', encoding='cp1252') as f:
+                f.write(vbs_code)
+                
+            if self.device_monitor: self.device_monitor.stop()
+            subprocess.Popen(['wscript.exe', vbs_path])
+            time.sleep(0.3)
+            os._exit(0)
+        except Exception as e:
+            messagebox.showerror("Error de Instalación", f"No se pudo iniciar la actualización:\n{e}")
+
+    # --- UI Base ---
     def _setup_ui(self):
         self.controls_frame.grid_columnconfigure(0, weight=1)
         
@@ -1386,97 +1591,6 @@ class OmniTagMobileApp(customtkinter.CTk):
         
         if self.auto_print_var.get():
             self.after(500, self.imprimir)
-
-    # --- Lógica de Auto-Update Thread-Safe ---
-    def check_updates_async(self):
-        def check():
-            try:
-                req = urllib.request.Request(GITHUB_API_LATEST, headers={'User-Agent': 'OmniTagMobileApp'})
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    data = json.loads(response.read().decode('utf-8'))
-                    remote_tag = data.get('tag_name', '').strip()
-                    
-                    if remote_tag and remote_tag != CURRENT_VERSION:
-                        assets = data.get('assets', [])
-                        download_url = None
-                        for asset in assets:
-                            if asset.get('name', '').endswith('.exe'):
-                                download_url = asset.get('browser_download_url')
-                                break
-                        if download_url:
-                            self.after(0, lambda: self.prompt_auto_update(remote_tag, download_url))
-            except Exception as e:
-                print(f"Update check log: {e}")
-        threading.Thread(target=check, daemon=True).start()
-
-    def prompt_auto_update(self, new_version, download_url):
-        ans = messagebox.askyesno(
-            "🚀 Nueva Versión Disponible",
-            f"Se ha detectado una nueva versión de OmniTag Mobile ({new_version}).\nTu versión actual es {CURRENT_VERSION}.\n\n¿Deseas descargar y actualizar automáticamente ahora?"
-        )
-        if ans:
-            self.ejecutar_actualizacion(download_url)
-
-    def ejecutar_actualizacion(self, download_url):
-        try:
-            progress_win = customtkinter.CTkToplevel(self)
-            progress_win.title("Descargando Actualización...")
-            progress_win.geometry("420x160")
-            progress_win.attributes("-topmost", True)
-            
-            lbl = customtkinter.CTkLabel(progress_win, text="Descargando OmniTagMobile.exe desde GitHub...", font=("Segoe UI", 12))
-            lbl.pack(pady=(20, 10))
-            
-            pbar = customtkinter.CTkProgressBar(progress_win, width=320)
-            pbar.pack(pady=10)
-            pbar.set(0.1)
-            
-            def download_worker():
-                try:
-                    temp_dir = tempfile.gettempdir()
-                    new_exe_path = os.path.join(temp_dir, "OmniTagMobile_new.exe")
-                    
-                    def hook(count, block_size, total_size):
-                        if total_size > 0:
-                            fraction = min(1.0, (count * block_size) / total_size)
-                            self.after(0, lambda f=fraction: pbar.set(f))
-
-                    urllib.request.urlretrieve(download_url, new_exe_path, reporthook=hook)
-                    self.after(0, lambda: self.finalizar_actualizacion(progress_win, new_exe_path))
-                except Exception as e_dl:
-                    self.after(0, lambda err=e_dl: self.error_actualizacion(progress_win, err))
-
-            threading.Thread(target=download_worker, daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Error de Actualización", f"No se pudo iniciar la actualización:\n{e}")
-
-    def error_actualizacion(self, progress_win, err):
-        try: progress_win.destroy()
-        except: pass
-        messagebox.showerror("Error de Actualización", f"Falló la descarga de la nueva versión:\n{err}")
-
-    def finalizar_actualizacion(self, progress_win, new_exe_path):
-        try: progress_win.destroy()
-        except: pass
-        
-        current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
-        temp_dir = tempfile.gettempdir()
-        updater_bat = os.path.join(temp_dir, "update_omnitag.bat")
-        
-        bat_script = f"""@echo off
-timeout /t 2 /nobreak > NUL
-copy /y "{new_exe_path}" "{current_exe}"
-start "" "{current_exe}"
-del "{new_exe_path}"
-del "%~f0"
-"""
-        with open(updater_bat, "w") as f:
-            f.write(bat_script)
-            
-        messagebox.showinfo("Actualización Lista", "La actualización se ha descargado correctamente.\nEl programa se cerrará y se reiniciará con la nueva versión.")
-        
-        subprocess.Popen(["cmd.exe", "/c", updater_bat], shell=True)
-        self.on_closing()
 
 if __name__ == "__main__":
     customtkinter.set_appearance_mode("dark")
