@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.0 (Soporte iPhone, Samsung, Google Pixel & Android + Auto-Updater)
+Versión: 4.0.1 (Mejora de Lectura IMEI en Android + iOS + Auto-Updater)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -23,11 +23,12 @@ import time
 import pandas as pd
 import urllib.request
 import urllib.parse
+import sys
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.0"
+CURRENT_VERSION = "v4.0.1"
 GITHUB_REPO = "MicaelCedano/OmniTagMobile"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -102,7 +103,7 @@ IPHONE_MODEL_MAPPING = {
     "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max", "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone 17 Plus",
 }
 
-# Mapeo Módulos Android (Samsung / Pixel)
+# Mapeo Modelos Android (Samsung / Pixel)
 SAMSUNG_MODEL_MAPPING = {
     "SM-S928B": "Samsung Galaxy S24 Ultra", "SM-S928U": "Samsung Galaxy S24 Ultra",
     "SM-S926B": "Samsung Galaxy S24+", "SM-S921B": "Samsung Galaxy S24",
@@ -258,6 +259,83 @@ def cargar_fuentes_pdf():
         else: raise IOError()
     except Exception:
         RL_FONT_REGULAR_NAME = 'Helvetica'
+
+# --- Extraer IMEI en Android (Estrategias Multicapa) ---
+def obtener_imei_android(dev):
+    """
+    Intenta obtener el IMEI de 15 dígitos en dispositivos Android utilizando múltiples comandos ADB.
+    """
+    # 1. Comandos directos de Android modern (Android 10+)
+    cmd_list = [
+        "cmd phone get-imei",
+        "cmd phone get-imei 0",
+        "cmd phone get-imei 1",
+        "cmd phone get-device-id"
+    ]
+    for cmd in cmd_list:
+        try:
+            res = dev.shell(cmd).strip()
+            digits = "".join([c for c in res if c.isdigit()])
+            if len(digits) >= 14:
+                return digits[:15]
+        except Exception: pass
+
+    # 2. Transacciones Parcel de 'service call iphonesubinfo'
+    for code in [1, 2, 3, 4, 7]:
+        try:
+            out = dev.shell(f"service call iphonesubinfo {code}")
+            if "Result: Parcel" in out:
+                hex_parts = re.findall(r"([0-9a-fA-F]{8})", out)
+                decoded_chars = []
+                for part in hex_parts[2:]:
+                    c1 = chr(int(part[2:4], 16))
+                    c2 = chr(int(part[6:8], 16))
+                    if c1.isdigit(): decoded_chars.append(c1)
+                    if c2.isdigit(): decoded_chars.append(c2)
+                digits = "".join(decoded_chars)
+                if len(digits) >= 14:
+                    return digits[:15]
+        except Exception: pass
+
+    # 3. Expresión regular en texto devuelto por service call
+    for code in [1, 2, 3, 4, 7]:
+        try:
+            out = dev.shell(f"service call iphonesubinfo {code}")
+            matches = re.findall(r"\'([^\']+)\'", out)
+            if matches:
+                combined = "".join(matches)
+                digits = "".join([c for c in combined if c.isdigit()])
+                if len(digits) >= 14:
+                    return digits[:15]
+        except Exception: pass
+
+    # 4. Dumpsys iphonesubinfo / telephony.registry
+    try:
+        out = dev.shell("dumpsys iphonesubinfo")
+        match = re.search(r"(?:Device ID|IMEI|imei)\s*=\s*(\d{14,15})", out)
+        if match: return match.group(1)
+    except Exception: pass
+
+    try:
+        out = dev.shell("dumpsys telephony.registry")
+        match = re.search(r"(?:mImei|mDeviceId)=(\d{14,15})", out)
+        if match: return match.group(1)
+    except Exception: pass
+
+    # 5. Propiedades de sistema (getprop)
+    props = [
+        "gsm.baseband.imei", "ril.imei", "ril.IMEI", 
+        "ro.ril.oem_imei", "persist.radio.imei", "gsm.imei1", "gsm.imei"
+    ]
+    for prop in props:
+        try:
+            val = dev.shell(f"getprop {prop}").strip()
+            digits = "".join([c for c in val if c.isdigit()])
+            if len(digits) >= 14:
+                return digits[:15]
+        except Exception: pass
+
+    return None
 
 # --- Previsualización y Generación de PDF ---
 def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_pil):
@@ -572,20 +650,14 @@ class UnifiedDeviceMonitor(threading.Thread):
                             brand = dev.shell("getprop ro.product.brand").strip().capitalize()
                             model_code = dev.shell("getprop ro.product.model").strip()
                             
-                            # Mapear modelo si es Samsung / Pixel
                             model_name = SAMSUNG_MODEL_MAPPING.get(model_code, f"{brand} {model_code}")
-                            
                             serial = dev.shell("getprop ro.serialno").strip() or udid
                             
-                            # Intentar IMEI
-                            imei = serial
-                            try:
-                                imei_out = dev.shell("getprop gsm.baseband.imei").strip()
-                                if imei_out and len(imei_out) >= 14:
-                                    imei = imei_out
-                            except: pass
-                            
-                            # Capacidad
+                            # Obtener IMEI mediante la función de estrategias avanzadas
+                            imei = obtener_imei_android(dev)
+                            if not imei:
+                                imei = serial # Fallback si el sistema Android bloquea IMEI
+
                             capacidad = ""
                             try:
                                 df_out = dev.shell("df -h /data")
@@ -649,7 +721,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title("OmniTag Mobile v4.0.0 - Detección Multimarca & Etiquetas")
+        self.title("OmniTag Mobile v4.0.1 - Detección Multimarca & Etiquetas")
         self.geometry("1300x720")
         self.minsize(1200, 620)
         self.configure(fg_color=COLOR_BG_DARK)
@@ -752,12 +824,12 @@ class OmniTagMobileApp(customtkinter.CTk):
         btn_paste_model.grid(row=0, column=1)
 
         # IMEI / S/N
-        customtkinter.CTkLabel(main_controls_frame, text="IMEI / Número de Serie:", font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color=COLOR_TEXT_PRIMARY).grid(row=2, column=0, sticky="w")
+        customtkinter.CTkLabel(main_controls_frame, text="IMEI:", font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color=COLOR_TEXT_PRIMARY).grid(row=2, column=0, sticky="w")
         imei_entry_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="transparent")
         imei_entry_frame.grid(row=3, column=0, pady=(2,15), sticky="ew")
         imei_entry_frame.grid_columnconfigure(0, weight=1)
         
-        self.imei_entry = customtkinter.CTkEntry(imei_entry_frame, textvariable=self.imei_var, placeholder_text="Ingrese IMEI o S/N...", fg_color="#0F172A", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=32)
+        self.imei_entry = customtkinter.CTkEntry(imei_entry_frame, textvariable=self.imei_var, placeholder_text="Ingrese IMEI...", fg_color="#0F172A", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=32)
         self.imei_entry.grid(row=0, column=0, padx=(0,5), sticky="ew")
         
         btn_paste_imei = customtkinter.CTkButton(imei_entry_frame, text="Pegar", width=55, command=self.pegar_imei, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, corner_radius=8, height=32)
@@ -887,7 +959,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         style.configure("Treeview.Heading", background="#334155", foreground="#F8FAFC", borderwidth=0, font=('Segoe UI', 10, 'bold'))
         
         self.tree = ttk.Treeview(table_container, columns=("IMEI", "Modelo"), show="headings", style="Treeview")
-        self.tree.heading("IMEI", text="IMEI / S/N")
+        self.tree.heading("IMEI", text="IMEI")
         self.tree.heading("Modelo", text="Modelo del Dispositivo")
         self.tree.column("IMEI", width=140, anchor="center")
         self.tree.column("Modelo", width=250, anchor="w")
@@ -1261,7 +1333,6 @@ class OmniTagMobileApp(customtkinter.CTk):
                 urllib.request.urlretrieve(download_url, new_exe_path)
                 pbar.set(1.0)
                 
-                # Script de reemplazo automático (.bat)
                 updater_bat = os.path.join(temp_dir, "update_omnitag.bat")
                 current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
                 
@@ -1279,7 +1350,6 @@ del "%~f0"
                 subprocess.Popen(["cmd.exe", "/c", updater_bat], shell=True)
                 sys.exit(0)
 
-            import sys
             threading.Thread(target=download_worker, daemon=True).start()
         except Exception as e:
             messagebox.showerror("Error de Actualización", f"No se pudo completar la actualización automática:\n{e}")
