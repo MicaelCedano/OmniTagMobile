@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.7 (Ajuste Proporcional Completo de Etiqueta 2x1 y Código de Barras)
+Versión: 4.0.8 (Restauración Exacta 1:1 de Diseño de Etiqueta Original de MCTools)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,7 +28,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.7"
+CURRENT_VERSION = "v4.0.8"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -64,6 +64,21 @@ def parse_version(v_str):
         return tuple(map(int, v_clean.split('.')))
     except Exception:
         return (0, 0, 0)
+
+# --- Cache de Fuentes PIL (MCTools Exact) ---
+_fuentes_pil_cache = {}
+
+def obtener_fuente_pil(ruta_fuente, tamano):
+    clave = (ruta_fuente, tamano)
+    if clave not in _fuentes_pil_cache:
+        try:
+            if os.path.exists(ruta_fuente):
+                _fuentes_pil_cache[clave] = ImageFont.truetype(ruta_fuente, size=tamano)
+            else:
+                _fuentes_pil_cache[clave] = ImageFont.load_default()
+        except Exception:
+            _fuentes_pil_cache[clave] = ImageFont.load_default()
+    return _fuentes_pil_cache[clave]
 
 # --- Dependencias iOS (pymobiledevice3) ---
 PYMOBILEDEVICE_AVAILABLE = False
@@ -449,68 +464,61 @@ def obtener_imei_android(dev):
 
     return None
 
-# --- Previsualización y Generación de PDF Adaptadas para Etiquetas 2" x 1" ---
+# --- PREVISUALIZACIÓN Y PDF (MCTOOLS EXACT 1:1) ---
 def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_pil):
+    """Genera la etiqueta como una imagen PIL, replicando la lógica exacta de MCTools."""
     DPI = 300
-    LABEL_WIDTH_PX, LABEL_HEIGHT_PX = int(LABEL_WIDTH_INCHES * DPI), int(LABEL_HEIGHT_INCHES * DPI)  # 600x300 px
+    LABEL_WIDTH_PX, LABEL_HEIGHT_PX = int(LABEL_WIDTH_INCHES * DPI), int(LABEL_HEIGHT_INCHES * DPI)
     
-    TOP_MARGIN_PX = int(0.06 * DPI)    # ~18px
-    SIDE_MARGIN_PX = int(0.08 * DPI)   # ~24px
+    TOP_MARGIN_PX = int(0.20 * DPI)
+    SIDE_MARGIN_PX = int(0.15 * DPI)
     
     image = Image.new("RGB", (LABEL_WIDTH_PX, LABEL_HEIGHT_PX), "white")
     draw = ImageDraw.Draw(image)
     
-    # Fuentes con tamaño optimizado para encajar perfectamente sin cortar el código de barras
-    try:
-        font_bold = ImageFont.truetype(FONT_BOLD_PATH_TTF, size=24)
-        font_regular = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=20)
-        font_sn = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=18)
-    except IOError:
-        font_bold, font_regular, font_sn = ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default()
+    font_bold = obtener_fuente_pil(FONT_BOLD_PATH_TTF, int(12 * DPI / 72))
+    font_regular = obtener_fuente_pil(FONT_REGULAR_PATH_TTF, int(10 * DPI / 72))
     
     current_y = TOP_MARGIN_PX
     
-    # 1. Logo superior
+    # 1. Logo
     if path_logo_pil and os.path.exists(path_logo_pil):
         try:
             with Image.open(path_logo_pil) as logo_img:
                 logo_img = logo_img.convert("RGBA")
                 logo_max_width = LABEL_WIDTH_PX - 2 * SIDE_MARGIN_PX
-                logo_max_height = 42  # Altura máxima adecuada
+                logo_max_height = int(0.28 * LABEL_HEIGHT_PX)
                 logo_img.thumbnail((logo_max_width, logo_max_height), Image.Resampling.LANCZOS)
+                
                 logo_x = (LABEL_WIDTH_PX - logo_img.width) // 2
                 image.paste(logo_img, (logo_x, current_y), logo_img)
-                current_y += logo_img.height + 8
+                current_y += logo_img.height + int(0.1 * DPI)
         except Exception as e:
             print(f"Error procesando logo: {e}")
 
-    # 2. Línea Modelo
-    if modelo:
-        txt_mod = f"Modelo: {modelo}"
-        x_mod = (LABEL_WIDTH_PX - draw.textlength(txt_mod, font=font_bold)) // 2
-        draw.text((x_mod, current_y), txt_mod, fill="black", font=font_bold)
-        current_y += 28
+    # 2. Texto (Modelo e IMEI únicamente)
+    info_items = [
+        (f"Modelo: {modelo}", font_bold, modelo),
+        (f"IMEI: {numero_serie}", font_bold, numero_serie),
+    ]
+    
+    for texto, font, valor in info_items:
+        if not valor.strip(): continue
+        x_pos = (LABEL_WIDTH_PX - draw.textlength(texto, font=font)) // 2
+        draw.text((x_pos, current_y), texto, fill="black", font=font)
+        current_y += font.size + 4
 
-    # 3. Especificación opcional
-    if especificacion:
-        x_spec = (LABEL_WIDTH_PX - draw.textlength(especificacion, font=font_regular)) // 2
-        draw.text((x_spec, current_y), especificacion, fill="black", font=font_regular)
-        current_y += 24
-
-    # 4. Línea IMEI
-    if numero_serie:
-        txt_imei = f"IMEI: {numero_serie}"
-        x_imei = (LABEL_WIDTH_PX - draw.textlength(txt_imei, font=font_bold)) // 2
-        draw.text((x_imei, current_y), txt_imei, fill="black", font=font_bold)
-        current_y += 30
-
-    # 5. Código de Barras e IMEI inferior (Encajado completo)
+    # 3. Código de Barras
     if numero_serie:
         try:
+            current_y += int(0.1 * DPI)
             barcode_options = {
-                'module_height': 8.0, 'module_width': 0.25,
-                'quiet_zone': 3.0, 'write_text': False,
-                'font_size': 8
+                'module_height': 15.0,
+                'module_width': 0.3,
+                'quiet_zone': 6.5,
+                'write_text': False,
+                'text_distance': 5.0,
+                'font_size': 10
             }
             code128 = barcode.get_barcode_class('code128')
             writer = ImageWriter()
@@ -520,18 +528,21 @@ def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_
             max_bc_w = LABEL_WIDTH_PX - 2 * SIDE_MARGIN_PX
             if barcode_pil.width > max_bc_w:
                 ratio = max_bc_w / barcode_pil.width
-                new_w, new_h = int(barcode_pil.width * ratio), int(barcode_pil.height * ratio)
-                barcode_pil = barcode_pil.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                new_width = int(barcode_pil.width * ratio)
+                new_height = int(barcode_pil.height * ratio)
+                barcode_pil = barcode_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
+            sn_font = obtener_fuente_pil(FONT_REGULAR_PATH_TTF, int(9 * DPI / 72))
+            sn_text_w = draw.textlength(numero_serie, font=sn_font)
+            
             bc_x = (LABEL_WIDTH_PX - barcode_pil.width) // 2
             image.paste(barcode_pil, (bc_x, current_y))
-            current_y += barcode_pil.height + 4
+            current_y += barcode_pil.height + int(0.03 * DPI)
 
-            sn_text_w = draw.textlength(numero_serie, font=font_sn)
             sn_x = (LABEL_WIDTH_PX - sn_text_w) // 2
-            draw.text((sn_x, current_y), numero_serie, fill="black", font=font_sn)
+            draw.text((sn_x, current_y), numero_serie, fill="black", font=sn_font)
         except Exception as e:
-            print(f"Error código de barras PIL: {e}")
+            print(f"Error generando código de barras en previsualización: {e}")
             
     return image
 
@@ -543,13 +554,17 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
     
     c = reportlab_canvas.Canvas(temp_pdf_path, pagesize=(LABEL_WIDTH_INCHES * inch, LABEL_HEIGHT_INCHES * inch))
     width, height = LABEL_WIDTH_INCHES * inch, LABEL_HEIGHT_INCHES * inch
-    margin_top, margin_sides = 0.05 * inch, 0.08 * inch
+    
+    margin_top = 0.20 * inch
+    margin_sides = 0.15 * inch
     current_y = height - margin_top
 
+    # 1. Logo
     try:
         if path_logo_pil and os.path.exists(path_logo_pil):
             logo_pil = Image.open(path_logo_pil)
-            logo_max_width_pt, logo_max_height_pt = width - 2 * margin_sides, 0.20 * height
+            logo_max_width_pt = width - 2 * margin_sides
+            logo_max_height_pt = 0.28 * height
             w_px, h_px = logo_pil.size
             aspect = h_px / float(w_px) if w_px > 0 else 0
             logo_w_pt = logo_max_width_pt
@@ -561,32 +576,36 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
             img_reader = ReportLabImageReader(logo_pil)
             current_y -= logo_h_pt
             c.drawImage(img_reader, (width - logo_w_pt) / 2, current_y, width=logo_w_pt, height=logo_h_pt, mask='auto')
-            current_y -= 4
+            current_y -= 0.1 * inch
     except Exception as e:
-        print(f"Error logo PDF: {e}")
+        print(f"Error al procesar logo para PDF: {e}")
 
-    info_items_pdf = []
-    if modelo:
-        info_items_pdf.append((f"Modelo: {modelo}", RL_FONT_BOLD_NAME, 8))
-    if especificacion:
-        info_items_pdf.append((especificacion, RL_FONT_REGULAR_NAME, 7))
-    if numero_serie:
-        info_items_pdf.append((f"IMEI: {numero_serie}", RL_FONT_BOLD_NAME, 8))
+    # 2. Texto
+    info_items = [
+        (f"Modelo: {modelo}", RL_FONT_BOLD_NAME, 12, modelo),
+        (f"IMEI: {numero_serie}", RL_FONT_BOLD_NAME, 12, numero_serie),
+    ]
     
-    for texto, font, size in info_items_pdf:
+    for texto, font, size, valor in info_items:
+        if not valor.strip(): continue
         current_y -= size
         c.setFont(font, size)
         c.drawCentredString(width / 2, current_y, texto)
-        current_y -= 2
+        current_y -= 4
 
+    # 3. Código de Barras
     if numero_serie:
         try:
-            current_y -= 2
+            current_y -= 0.1 * inch
             barcode_options = {
-                'module_height': 7.0, 'module_width': 0.25,
-                'quiet_zone': 2.0, 'write_text': False,
-                'font_size': 7
+                'module_height': 15.0,
+                'module_width': 0.3,
+                'quiet_zone': 6.5,
+                'write_text': False,
+                'text_distance': 5.0,
+                'font_size': 10
             }
+            
             code128 = barcode.get_barcode_class('code128')
             writer = ImageWriter()
             barcode_obj = code128(numero_serie, writer=writer)
@@ -606,8 +625,8 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
             current_y -= bc_h
             c.drawImage(img_reader, (width - bc_w) / 2, current_y, width=bc_w, height=bc_h, mask='auto')
             
-            sn_font_size = 7
-            current_y -= 1 + sn_font_size
+            sn_font_size = 9
+            current_y -= 3 + sn_font_size
             c.setFont(RL_FONT_REGULAR_NAME, sn_font_size)
             c.drawCentredString(width / 2, current_y, numero_serie)
         except Exception as e:
