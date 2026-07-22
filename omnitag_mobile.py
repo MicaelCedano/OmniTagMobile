@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.6 (Corrección Decodificación UTF-16LE Parcel IMEI 3536... & Actualizador MCTools)
+Versión: 4.0.7 (Ajuste Proporcional Completo de Etiqueta 2x1 y Código de Barras)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,7 +28,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.6"
+CURRENT_VERSION = "v4.0.7"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -375,13 +375,6 @@ def cargar_fuentes_pdf():
 
 # --- Decodificador Parcel UTF-16 LE para Android ---
 def decode_parcel_utf16(parcel_output):
-    """
-    Decodifica una respuesta Parcel UTF-16LE de 'service call iphonesubinfo'.
-    En palabras de 32 bits de Parcel (ej. 00350033):
-      - uint16 inferior (word[4:8] = 0033) -> ASCII '3'
-      - uint16 superior (word[0:4] = 0035) -> ASCII '5'
-    Esto garantiza leer '3536...' en el orden numérico correcto.
-    """
     hex_words = re.findall(r"([0-9a-fA-F]{8})", parcel_output)
     if not hex_words or len(hex_words) < 3:
         return None
@@ -401,9 +394,8 @@ def decode_parcel_utf16(parcel_output):
         return digits[:15]
     return None
 
-# --- Extraer IMEI en Android (Android 10, 11, 12, 13, 14, 15) ---
+# --- Extraer IMEI en Android ---
 def obtener_imei_android(dev):
-    # 1. Service call iphonesubinfo pasando com.android.shell con decodificación Little Endian
     for code in [1, 2, 3, 4, 5, 7, 8, 9, 10]:
         try:
             out = dev.shell(f'service call iphonesubinfo {code} s16 "com.android.shell"')
@@ -412,7 +404,6 @@ def obtener_imei_android(dev):
                 if imei: return imei
         except Exception: pass
 
-    # 2. Service call iphonesubinfo estándar
     for code in [1, 2, 3, 4]:
         try:
             out = dev.shell(f"service call iphonesubinfo {code}")
@@ -421,7 +412,6 @@ def obtener_imei_android(dev):
                 if imei: return imei
         except Exception: pass
 
-    # 3. Comandos cmd phone
     cmd_list = [
         'cmd phone get-imei 0 s16 "com.android.shell"',
         'cmd phone get-imei 1 s16 "com.android.shell"',
@@ -436,7 +426,6 @@ def obtener_imei_android(dev):
                 return digits[:15]
         except Exception: pass
 
-    # 4. Dumpsys iphonesubinfo / dumpsys telephony.registry
     for d_cmd in ["dumpsys iphonesubinfo", "dumpsys telephony.registry"]:
         try:
             out = dev.shell(d_cmd)
@@ -446,7 +435,6 @@ def obtener_imei_android(dev):
                     return m[:15]
         except Exception: pass
 
-    # 5. Propiedades de sistema (getprop)
     props = [
         "gsm.baseband.imei", "ril.imei", "ril.IMEI", 
         "ro.ril.oem_imei", "persist.radio.imei", "gsm.imei1", "gsm.imei", "ril.serialnumber"
@@ -461,55 +449,68 @@ def obtener_imei_android(dev):
 
     return None
 
-# --- Previsualización y Generación de PDF ---
+# --- Previsualización y Generación de PDF Adaptadas para Etiquetas 2" x 1" ---
 def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_pil):
     DPI = 300
-    LABEL_WIDTH_PX, LABEL_HEIGHT_PX = int(LABEL_WIDTH_INCHES * DPI), int(LABEL_HEIGHT_INCHES * DPI)
-    TOP_MARGIN_PX = int(0.20 * DPI)
-    SIDE_MARGIN_PX = int(0.15 * DPI)
+    LABEL_WIDTH_PX, LABEL_HEIGHT_PX = int(LABEL_WIDTH_INCHES * DPI), int(LABEL_HEIGHT_INCHES * DPI)  # 600x300 px
+    
+    TOP_MARGIN_PX = int(0.06 * DPI)    # ~18px
+    SIDE_MARGIN_PX = int(0.08 * DPI)   # ~24px
     
     image = Image.new("RGB", (LABEL_WIDTH_PX, LABEL_HEIGHT_PX), "white")
     draw = ImageDraw.Draw(image)
+    
+    # Fuentes con tamaño optimizado para encajar perfectamente sin cortar el código de barras
     try:
-        font_bold = ImageFont.truetype(FONT_BOLD_PATH_TTF, size=int(12 * DPI / 72))
-        font_regular = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=int(10 * DPI / 72))
+        font_bold = ImageFont.truetype(FONT_BOLD_PATH_TTF, size=24)
+        font_regular = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=20)
+        font_sn = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=18)
     except IOError:
-        font_bold, font_regular = ImageFont.load_default(), ImageFont.load_default()
+        font_bold, font_regular, font_sn = ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default()
     
     current_y = TOP_MARGIN_PX
+    
+    # 1. Logo superior
     if path_logo_pil and os.path.exists(path_logo_pil):
         try:
             with Image.open(path_logo_pil) as logo_img:
                 logo_img = logo_img.convert("RGBA")
                 logo_max_width = LABEL_WIDTH_PX - 2 * SIDE_MARGIN_PX
-                logo_max_height = int(0.28 * LABEL_HEIGHT_PX)
+                logo_max_height = 42  # Altura máxima adecuada
                 logo_img.thumbnail((logo_max_width, logo_max_height), Image.Resampling.LANCZOS)
                 logo_x = (LABEL_WIDTH_PX - logo_img.width) // 2
                 image.paste(logo_img, (logo_x, current_y), logo_img)
-                current_y += logo_img.height + int(0.1 * DPI)
+                current_y += logo_img.height + 8
         except Exception as e:
             print(f"Error procesando logo: {e}")
 
-    texto_modelo = f"Modelo: {modelo}"
-    texto_detalles = especificacion if especificacion else ""
-    info_items = [(texto_modelo, font_bold, modelo)]
-    if texto_detalles:
-        info_items.append((texto_detalles, font_regular, texto_detalles))
-    info_items.append((f"IMEI: {numero_serie}", font_bold, numero_serie))
-    
-    for texto, font, valor in info_items:
-        if not valor.strip(): continue
-        x_pos = (LABEL_WIDTH_PX - draw.textlength(texto, font=font)) // 2
-        draw.text((x_pos, current_y), texto, fill="black", font=font)
-        current_y += font.size + 8
+    # 2. Línea Modelo
+    if modelo:
+        txt_mod = f"Modelo: {modelo}"
+        x_mod = (LABEL_WIDTH_PX - draw.textlength(txt_mod, font=font_bold)) // 2
+        draw.text((x_mod, current_y), txt_mod, fill="black", font=font_bold)
+        current_y += 28
 
+    # 3. Especificación opcional
+    if especificacion:
+        x_spec = (LABEL_WIDTH_PX - draw.textlength(especificacion, font=font_regular)) // 2
+        draw.text((x_spec, current_y), especificacion, fill="black", font=font_regular)
+        current_y += 24
+
+    # 4. Línea IMEI
+    if numero_serie:
+        txt_imei = f"IMEI: {numero_serie}"
+        x_imei = (LABEL_WIDTH_PX - draw.textlength(txt_imei, font=font_bold)) // 2
+        draw.text((x_imei, current_y), txt_imei, fill="black", font=font_bold)
+        current_y += 30
+
+    # 5. Código de Barras e IMEI inferior (Encajado completo)
     if numero_serie:
         try:
-            current_y += int(0.1 * DPI)
             barcode_options = {
-                'module_height': 15.0, 'module_width': 0.3,
-                'quiet_zone': 6.5, 'write_text': False,
-                'text_distance': 5.0, 'font_size': 10
+                'module_height': 8.0, 'module_width': 0.25,
+                'quiet_zone': 3.0, 'write_text': False,
+                'font_size': 8
             }
             code128 = barcode.get_barcode_class('code128')
             writer = ImageWriter()
@@ -519,18 +520,16 @@ def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_
             max_bc_w = LABEL_WIDTH_PX - 2 * SIDE_MARGIN_PX
             if barcode_pil.width > max_bc_w:
                 ratio = max_bc_w / barcode_pil.width
-                new_width, new_height = int(barcode_pil.width * ratio), int(barcode_pil.height * ratio)
-                barcode_pil = barcode_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                new_w, new_h = int(barcode_pil.width * ratio), int(barcode_pil.height * ratio)
+                barcode_pil = barcode_pil.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            sn_font = ImageFont.truetype(FONT_REGULAR_PATH_TTF, size=int(9 * DPI / 72))
-            sn_text_w = draw.textlength(numero_serie, font=sn_font)
-            
             bc_x = (LABEL_WIDTH_PX - barcode_pil.width) // 2
             image.paste(barcode_pil, (bc_x, current_y))
-            current_y += barcode_pil.height + int(0.03 * DPI)
+            current_y += barcode_pil.height + 4
 
+            sn_text_w = draw.textlength(numero_serie, font=font_sn)
             sn_x = (LABEL_WIDTH_PX - sn_text_w) // 2
-            draw.text((sn_x, current_y), numero_serie, fill="black", font=sn_font)
+            draw.text((sn_x, current_y), numero_serie, fill="black", font=font_sn)
         except Exception as e:
             print(f"Error código de barras PIL: {e}")
             
@@ -544,13 +543,13 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
     
     c = reportlab_canvas.Canvas(temp_pdf_path, pagesize=(LABEL_WIDTH_INCHES * inch, LABEL_HEIGHT_INCHES * inch))
     width, height = LABEL_WIDTH_INCHES * inch, LABEL_HEIGHT_INCHES * inch
-    margin_top, margin_sides = 0.20 * inch, 0.15 * inch
+    margin_top, margin_sides = 0.05 * inch, 0.08 * inch
     current_y = height - margin_top
 
     try:
         if path_logo_pil and os.path.exists(path_logo_pil):
             logo_pil = Image.open(path_logo_pil)
-            logo_max_width_pt, logo_max_height_pt = width - 2 * margin_sides, 0.28 * height
+            logo_max_width_pt, logo_max_height_pt = width - 2 * margin_sides, 0.20 * height
             w_px, h_px = logo_pil.size
             aspect = h_px / float(w_px) if w_px > 0 else 0
             logo_w_pt = logo_max_width_pt
@@ -562,29 +561,31 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
             img_reader = ReportLabImageReader(logo_pil)
             current_y -= logo_h_pt
             c.drawImage(img_reader, (width - logo_w_pt) / 2, current_y, width=logo_w_pt, height=logo_h_pt, mask='auto')
-            current_y -= 0.1 * inch
+            current_y -= 4
     except Exception as e:
         print(f"Error logo PDF: {e}")
 
-    info_items_pdf = [(f"Modelo: {modelo}", RL_FONT_BOLD_NAME, 12, modelo)]
+    info_items_pdf = []
+    if modelo:
+        info_items_pdf.append((f"Modelo: {modelo}", RL_FONT_BOLD_NAME, 8))
     if especificacion:
-        info_items_pdf.append((especificacion, RL_FONT_REGULAR_NAME, 11, especificacion))
-    info_items_pdf.append((f"IMEI: {numero_serie}", RL_FONT_BOLD_NAME, 12, numero_serie))
+        info_items_pdf.append((especificacion, RL_FONT_REGULAR_NAME, 7))
+    if numero_serie:
+        info_items_pdf.append((f"IMEI: {numero_serie}", RL_FONT_BOLD_NAME, 8))
     
-    for texto, font, size, valor in info_items_pdf:
-        if not valor.strip(): continue
+    for texto, font, size in info_items_pdf:
         current_y -= size
         c.setFont(font, size)
         c.drawCentredString(width / 2, current_y, texto)
-        current_y -= 6
+        current_y -= 2
 
     if numero_serie:
         try:
-            current_y -= 0.1 * inch
+            current_y -= 2
             barcode_options = {
-                'module_height': 15.0, 'module_width': 0.3,
-                'quiet_zone': 6.5, 'write_text': False,
-                'text_distance': 5.0, 'font_size': 10
+                'module_height': 7.0, 'module_width': 0.25,
+                'quiet_zone': 2.0, 'write_text': False,
+                'font_size': 7
             }
             code128 = barcode.get_barcode_class('code128')
             writer = ImageWriter()
@@ -605,8 +606,8 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
             current_y -= bc_h
             c.drawImage(img_reader, (width - bc_w) / 2, current_y, width=bc_w, height=bc_h, mask='auto')
             
-            sn_font_size = 9
-            current_y -= 3 + sn_font_size
+            sn_font_size = 7
+            current_y -= 1 + sn_font_size
             c.setFont(RL_FONT_REGULAR_NAME, sn_font_size)
             c.drawCentredString(width / 2, current_y, numero_serie)
         except Exception as e:
@@ -954,16 +955,14 @@ class OmniTagMobileApp(customtkinter.CTk):
                 except Exception: pass
                 os._exit(0)
 
-    # --- Lógica de Auto-Update Estilo MCTools (Inline Progress & Silent VBS/BAT) ---
+    # --- Lógica de Auto-Update Estilo MCTools ---
     def accion_boton_actualizacion(self):
-        """Maneja el clic en el botón de actualización según su estado."""
         if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None):
             self.ejecutar_instalacion_inmediata()
         else:
             self.chequear_actualizaciones_async(manual=True)
 
     def chequear_actualizaciones_async(self, manual=False):
-        """Inicia el chequeo de actualizaciones en un hilo secundario."""
         if getattr(self, 'update_ready', False): return
         if manual:
             self.btn_update.configure(text="Buscando...", fg_color="#334155", state="disabled")
@@ -999,7 +998,6 @@ class OmniTagMobileApp(customtkinter.CTk):
                         break
                 
                 if exe_url and getattr(sys, 'frozen', False):
-                    # Iniciar descarga inline automáticamente
                     self.after(100, lambda: self.iniciar_descarga_inline(exe_url, latest_version_tag))
                 else:
                     self.after(100, lambda: self.btn_update.configure(text="¡Nueva v" + latest_version + "!", fg_color="#EF4444", state="normal"))
@@ -1016,7 +1014,6 @@ class OmniTagMobileApp(customtkinter.CTk):
             self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
 
     def iniciar_descarga_inline(self, exe_url, nueva_version_tag):
-        """Inicia la descarga de la nueva versión mostrando la barra de progreso inline."""
         self.btn_update.configure(text="Descargando 0%", fg_color="#0284C7", state="disabled")
         self.update_progress.grid()
         self.update_progress.set(0)
@@ -1073,7 +1070,6 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.btn_update.configure(text="Buscar act.", fg_color="#334155", state="normal")
 
     def ejecutar_instalacion_inmediata(self):
-        """Ejecuta la sustitución del ejecutable e inicia la nueva versión silenciosamente (vbs + bat)."""
         if not hasattr(self, 'downloaded_new_exe') or not self.downloaded_new_exe or not os.path.exists(self.downloaded_new_exe):
             messagebox.showerror("Error", "No se encontró el archivo de actualización listo para instalar.")
             return
