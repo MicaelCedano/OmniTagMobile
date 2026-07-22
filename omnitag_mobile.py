@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.5 (Sistema de Actualización Inline Estilo MCTools & Lectura IMEI Android 10+)
+Versión: 4.0.6 (Corrección Decodificación UTF-16LE Parcel IMEI 3536... & Actualizador MCTools)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,7 +28,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.5"
+CURRENT_VERSION = "v4.0.6"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -59,7 +59,6 @@ LABEL_HEIGHT_INCHES = 1.0
 PREVIEW_MAX_WIDTH = 380
 
 def parse_version(v_str):
-    """Convierte una cadena de versión tipo '4.0.5' o 'v4.0.5' en una tupla de enteros."""
     v_clean = re.sub(r'[^0-9.]', '', str(v_str))
     try:
         return tuple(map(int, v_clean.split('.')))
@@ -374,23 +373,43 @@ def cargar_fuentes_pdf():
     except Exception:
         RL_FONT_REGULAR_NAME = 'Helvetica'
 
+# --- Decodificador Parcel UTF-16 LE para Android ---
+def decode_parcel_utf16(parcel_output):
+    """
+    Decodifica una respuesta Parcel UTF-16LE de 'service call iphonesubinfo'.
+    En palabras de 32 bits de Parcel (ej. 00350033):
+      - uint16 inferior (word[4:8] = 0033) -> ASCII '3'
+      - uint16 superior (word[0:4] = 0035) -> ASCII '5'
+    Esto garantiza leer '3536...' en el orden numérico correcto.
+    """
+    hex_words = re.findall(r"([0-9a-fA-F]{8})", parcel_output)
+    if not hex_words or len(hex_words) < 3:
+        return None
+        
+    chars = []
+    for word in hex_words[2:]:
+        try:
+            u1 = int(word[4:8], 16)
+            u2 = int(word[0:4], 16)
+            if 32 <= u1 <= 126: chars.append(chr(u1))
+            if 32 <= u2 <= 126: chars.append(chr(u2))
+        except Exception: pass
+        
+    result = "".join(chars)
+    digits = "".join([c for c in result if c.isdigit()])
+    if len(digits) >= 14:
+        return digits[:15]
+    return None
+
 # --- Extraer IMEI en Android (Android 10, 11, 12, 13, 14, 15) ---
 def obtener_imei_android(dev):
-    # 1. Service call iphonesubinfo pasando com.android.shell
+    # 1. Service call iphonesubinfo pasando com.android.shell con decodificación Little Endian
     for code in [1, 2, 3, 4, 5, 7, 8, 9, 10]:
         try:
             out = dev.shell(f'service call iphonesubinfo {code} s16 "com.android.shell"')
             if "Result: Parcel" in out:
-                hex_parts = re.findall(r"([0-9a-fA-F]{8})", out)
-                decoded_chars = []
-                for part in hex_parts[2:]:
-                    c1 = chr(int(part[2:4], 16))
-                    c2 = chr(int(part[6:8], 16))
-                    if c1.isdigit(): decoded_chars.append(c1)
-                    if c2.isdigit(): decoded_chars.append(c2)
-                digits = "".join(decoded_chars)
-                if len(digits) >= 14:
-                    return digits[:15]
+                imei = decode_parcel_utf16(out)
+                if imei: return imei
         except Exception: pass
 
     # 2. Service call iphonesubinfo estándar
@@ -398,16 +417,8 @@ def obtener_imei_android(dev):
         try:
             out = dev.shell(f"service call iphonesubinfo {code}")
             if "Result: Parcel" in out:
-                hex_parts = re.findall(r"([0-9a-fA-F]{8})", out)
-                decoded_chars = []
-                for part in hex_parts[2:]:
-                    c1 = chr(int(part[2:4], 16))
-                    c2 = chr(int(part[6:8], 16))
-                    if c1.isdigit(): decoded_chars.append(c1)
-                    if c2.isdigit(): decoded_chars.append(c2)
-                digits = "".join(decoded_chars)
-                if len(digits) >= 14:
-                    return digits[:15]
+                imei = decode_parcel_utf16(out)
+                if imei: return imei
         except Exception: pass
 
     # 3. Comandos cmd phone
@@ -1002,7 +1013,6 @@ class OmniTagMobileApp(customtkinter.CTk):
             if manual:
                 self.after(200, lambda: messagebox.showerror("Error", f"No se pudo buscar actualizaciones:\n{e}"))
         finally:
-            # Reprogramar cada 15 minutos (900,000 ms)
             self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
 
     def iniciar_descarga_inline(self, exe_url, nueva_version_tag):
