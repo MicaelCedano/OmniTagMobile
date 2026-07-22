@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.8 (Restauración Exacta 1:1 de Diseño de Etiqueta Original de MCTools)
+Versión: 4.0.9 (Formato de Etiqueta 4x3 pulgadas exacto desde formato.py)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,7 +28,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.8"
+CURRENT_VERSION = "v4.0.9"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -54,9 +54,11 @@ FONT_REGULAR_PATH_TTF = _get_asset_path("arial.ttf")
 RL_FONT_BOLD_NAME = "ArialBoldRegistered"
 RL_FONT_REGULAR_NAME = "ArialRegularRegistered"
 
-LABEL_WIDTH_INCHES = 2.0
-LABEL_HEIGHT_INCHES = 1.0
+# --- CONSTANTES EXACTAS DE DIMENSIÓN DE ETIQUETA (DESDE formato.py) ---
+LABEL_WIDTH_INCHES = 4
+LABEL_HEIGHT_INCHES = 3
 PREVIEW_MAX_WIDTH = 380
+PREVIEW_MAX_HEIGHT = int(PREVIEW_MAX_WIDTH * (LABEL_HEIGHT_INCHES / LABEL_WIDTH_INCHES))
 
 def parse_version(v_str):
     v_clean = re.sub(r'[^0-9.]', '', str(v_str))
@@ -65,7 +67,7 @@ def parse_version(v_str):
     except Exception:
         return (0, 0, 0)
 
-# --- Cache de Fuentes PIL (MCTools Exact) ---
+# --- Cache de Fuentes PIL ---
 _fuentes_pil_cache = {}
 
 def obtener_fuente_pil(ruta_fuente, tamano):
@@ -464,9 +466,9 @@ def obtener_imei_android(dev):
 
     return None
 
-# --- PREVISUALIZACIÓN Y PDF (MCTOOLS EXACT 1:1) ---
+# --- PREVISUALIZACIÓN Y PDF EXACTOS DESDE formato.py (ETIQUETA 4x3) ---
 def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_pil):
-    """Genera la etiqueta como una imagen PIL, replicando la lógica exacta de MCTools."""
+    """Genera la etiqueta como una imagen PIL, replicando la lógica exacta de formato.py."""
     DPI = 300
     LABEL_WIDTH_PX, LABEL_HEIGHT_PX = int(LABEL_WIDTH_INCHES * DPI), int(LABEL_HEIGHT_INCHES * DPI)
     
@@ -496,7 +498,7 @@ def _generar_etiqueta_pil_image(modelo, numero_serie, especificacion, path_logo_
         except Exception as e:
             print(f"Error procesando logo: {e}")
 
-    # 2. Texto (Modelo e IMEI únicamente)
+    # 2. Texto (Modelo e IMEI)
     info_items = [
         (f"Modelo: {modelo}", font_bold, modelo),
         (f"IMEI: {numero_serie}", font_bold, numero_serie),
@@ -868,7 +870,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title(f"OmniTag Mobile {CURRENT_VERSION} - Detección Multimarca & Etiquetas")
+        self.title(f"OmniTag Mobile {CURRENT_VERSION} - Detección Multimarca & Etiquetas (4x3 Formato)")
         self.geometry("1300x740")
         self.minsize(1200, 640)
         self.configure(fg_color=COLOR_BG_DARK)
@@ -895,7 +897,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Lectura Multimarca (iPhone / Samsung / Pixel) & Control de Inventario Excel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Formato Etiqueta 4x3'' Exacto • Lectura (iPhone / Samsung / Pixel) & Excel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
