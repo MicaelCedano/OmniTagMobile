@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.9 (Formato de Etiqueta 4x3 pulgadas exacto desde formato.py)
+Versión: 4.1.0 (Selección de Impresora Personalizada + Formato 4x3)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -25,10 +25,19 @@ import urllib.request
 import urllib.parse
 import sys
 
+# Impresión en Windows (win32print / win32api)
+WIN32PRINT_AVAILABLE = False
+try:
+    import win32print
+    import win32api
+    WIN32PRINT_AVAILABLE = True
+except Exception:
+    WIN32PRINT_AVAILABLE = False
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.9"
+CURRENT_VERSION = "v4.1.0"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -66,6 +75,27 @@ def parse_version(v_str):
         return tuple(map(int, v_clean.split('.')))
     except Exception:
         return (0, 0, 0)
+
+# --- Obtener Impresoras del Sistema ---
+def obtener_lista_impresoras():
+    impresoras = []
+    if WIN32PRINT_AVAILABLE and platform.system() == "Windows":
+        try:
+            enum_flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+            impresoras = [p[2] for p in win32print.EnumPrinters(enum_flags)]
+        except Exception as e:
+            print(f"Error enumerando impresoras: {e}")
+    
+    if not impresoras:
+        impresoras = ["Impresora Predeterminada"]
+    return impresoras
+
+def obtener_impresora_predeterminada():
+    if WIN32PRINT_AVAILABLE and platform.system() == "Windows":
+        try:
+            return win32print.GetDefaultPrinter()
+        except Exception: pass
+    return "Impresora Predeterminada"
 
 # --- Cache de Fuentes PIL ---
 _fuentes_pil_cache = {}
@@ -323,6 +353,20 @@ def guardar_logo_config(logo_path):
     if logo_path:
         config = _read_config()
         config["logo_path"] = logo_path
+        _write_config(config)
+
+def cargar_impresora_config():
+    config = _read_config()
+    p_name = config.get("selected_printer")
+    lista = obtener_lista_impresoras()
+    if p_name and p_name in lista:
+        return p_name
+    return obtener_impresora_predeterminada()
+
+def guardar_impresora_config(printer_name):
+    if printer_name:
+        config = _read_config()
+        config["selected_printer"] = printer_name
         _write_config(config)
 
 def cargar_excel_config():
@@ -897,7 +941,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Formato Etiqueta 4x3'' Exacto • Lectura (iPhone / Samsung / Pixel) & Excel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Selección de Impresora & Formato 4x3'' • iPhone / Samsung / Pixel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
@@ -969,6 +1013,8 @@ class OmniTagMobileApp(customtkinter.CTk):
         else:
             if self.device_monitor: self.device_monitor.stop()
             try: guardar_logo_config(self.logo_path_var.get().strip())
+            except Exception: pass
+            try: guardar_impresora_config(self.printer_var.get().strip())
             except Exception: pass
             finally:
                 cleanup_temp_files()
@@ -1141,16 +1187,17 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.modelo_var = tk.StringVar()
         self.imei_var = tk.StringVar()
         self.logo_path_var = tk.StringVar(value=cargar_logo_config())
+        self.printer_var = tk.StringVar(value=cargar_impresora_config())
         self.status_label = self.badge_label
         
         main_controls_frame = customtkinter.CTkFrame(self.controls_frame, fg_color="transparent")
-        main_controls_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        main_controls_frame.grid(row=0, column=0, padx=20, pady=(15, 10), sticky="ew")
         main_controls_frame.grid_columnconfigure(0, weight=1)
 
         # Modelo
         customtkinter.CTkLabel(main_controls_frame, text="Modelo Dispositivo:", font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color=COLOR_TEXT_PRIMARY).grid(row=0, column=0, sticky="w")
         modelo_entry_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="transparent")
-        modelo_entry_frame.grid(row=1, column=0, pady=(2,10), sticky="ew")
+        modelo_entry_frame.grid(row=1, column=0, pady=(2,8), sticky="ew")
         modelo_entry_frame.grid_columnconfigure(0, weight=1)
         
         self.modelo_entry = customtkinter.CTkEntry(modelo_entry_frame, textvariable=self.modelo_var, placeholder_text="Ej: Samsung S23 Ultra Black 256GB", fg_color="#0F172A", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=32)
@@ -1162,7 +1209,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         # IMEI / S/N
         customtkinter.CTkLabel(main_controls_frame, text="IMEI:", font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color=COLOR_TEXT_PRIMARY).grid(row=2, column=0, sticky="w")
         imei_entry_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="transparent")
-        imei_entry_frame.grid(row=3, column=0, pady=(2,15), sticky="ew")
+        imei_entry_frame.grid(row=3, column=0, pady=(2,10), sticky="ew")
         imei_entry_frame.grid_columnconfigure(0, weight=1)
         
         self.imei_entry = customtkinter.CTkEntry(imei_entry_frame, textvariable=self.imei_var, placeholder_text="Ingrese IMEI...", fg_color="#0F172A", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=32)
@@ -1171,21 +1218,46 @@ class OmniTagMobileApp(customtkinter.CTk):
         btn_paste_imei = customtkinter.CTkButton(imei_entry_frame, text="Pegar", width=55, command=self.pegar_imei, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, corner_radius=8, height=32)
         btn_paste_imei.grid(row=0, column=1)
 
+        # SELECTOR DE IMPRESORA
+        printer_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="#0F172A", corner_radius=10, border_width=1, border_color=COLOR_CARD_BORDER)
+        printer_frame.grid(row=4, column=0, sticky='ew', pady=(0,10))
+        printer_frame.grid_columnconfigure(0, weight=1)
+        
+        customtkinter.CTkLabel(printer_frame, text="🖨️ Impresora Seleccionada:", font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLOR_TEXT_SECONDARY).grid(row=0, column=0, columnspan=2, padx=12, pady=(6,2), sticky="w")
+        
+        impresoras_disponibles = obtener_lista_impresoras()
+        self.printer_combo = customtkinter.CTkComboBox(
+            printer_frame, 
+            values=impresoras_disponibles, 
+            variable=self.printer_var, 
+            command=self.on_printer_selected,
+            fg_color="#1E293B", 
+            border_color=COLOR_CARD_BORDER, 
+            button_color=COLOR_ACCENT_SECONDARY,
+            text_color=COLOR_TEXT_PRIMARY, 
+            corner_radius=6, 
+            height=28
+        )
+        self.printer_combo.grid(row=1, column=0, padx=(12,5), pady=(0,8), sticky='ew')
+        
+        btn_refresh_printers = customtkinter.CTkButton(printer_frame, text="🔄", width=36, command=self.refrescar_impresoras, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, corner_radius=6, height=28)
+        btn_refresh_printers.grid(row=1, column=1, padx=(0,12), pady=(0,8))
+
         # Logo
         logo_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="#0F172A", corner_radius=10, border_width=1, border_color=COLOR_CARD_BORDER)
-        logo_frame.grid(row=4, column=0, sticky='ew', pady=(0,15))
+        logo_frame.grid(row=5, column=0, sticky='ew', pady=(0,12))
         logo_frame.grid_columnconfigure(0, weight=1)
         
-        customtkinter.CTkLabel(logo_frame, text="Ruta del Logo:", font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLOR_TEXT_SECONDARY).grid(row=0, column=0, columnspan=2, padx=12, pady=(8,2), sticky="w")
+        customtkinter.CTkLabel(logo_frame, text="Ruta del Logo:", font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLOR_TEXT_SECONDARY).grid(row=0, column=0, columnspan=2, padx=12, pady=(6,2), sticky="w")
         self.logo_entry = customtkinter.CTkEntry(logo_frame, textvariable=self.logo_path_var, fg_color="#1E293B", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=6, height=28)
-        self.logo_entry.grid(row=1, column=0, padx=(12,5), pady=(0,10), sticky='ew')
+        self.logo_entry.grid(row=1, column=0, padx=(12,5), pady=(0,8), sticky='ew')
         
         btn_search_logo = customtkinter.CTkButton(logo_frame, text="Buscar...", width=70, command=self.buscar_logo, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, corner_radius=6, height=28)
-        btn_search_logo.grid(row=1, column=1, padx=(0,12), pady=(0,10))
+        btn_search_logo.grid(row=1, column=1, padx=(0,12), pady=(0,8))
 
         # Botones PDF & Impresión
         pdf_buttons_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="transparent")
-        pdf_buttons_frame.grid(row=5, column=0, sticky='ew', pady=(0,15))
+        pdf_buttons_frame.grid(row=6, column=0, sticky='ew', pady=(0,12))
         pdf_buttons_frame.grid_columnconfigure((0,1), weight=1)
         
         btn_save_pdf = customtkinter.CTkButton(pdf_buttons_frame, text="Guardar PDF 💾", command=self.generar_y_guardar_pdf, fg_color=COLOR_ACCENT_PRIMARY, hover_color=COLOR_ACCENT_PRIMARY_HOVER, corner_radius=10, height=38)
@@ -1196,10 +1268,10 @@ class OmniTagMobileApp(customtkinter.CTk):
 
         # Switches
         switch_frame = customtkinter.CTkFrame(main_controls_frame, fg_color="transparent")
-        switch_frame.grid(row=6, column=0, pady=(5,0), sticky="ew")
+        switch_frame.grid(row=7, column=0, pady=(2,0), sticky="ew")
         
         self.sw_auto_print = customtkinter.CTkSwitch(switch_frame, text="Auto-Imprimir al Conectar", variable=self.auto_print_var, font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"), progress_color=COLOR_ACCENT_SUCCESS, text_color=COLOR_TEXT_SECONDARY)
-        self.sw_auto_print.pack(anchor="w", pady=(0,8))
+        self.sw_auto_print.pack(anchor="w", pady=(0,6))
         
         self.auto_shutdown_var = tk.BooleanVar(value=False)
         self.sw_auto_shutdown = customtkinter.CTkSwitch(switch_frame, text="Apagar al Terminar", variable=self.auto_shutdown_var, font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"), progress_color=COLOR_ACCENT_DANGER, text_color="#EF4444")
@@ -1207,11 +1279,11 @@ class OmniTagMobileApp(customtkinter.CTk):
 
         # Pie
         bottom_frame = customtkinter.CTkFrame(self.controls_frame, fg_color="transparent")
-        bottom_frame.grid(row=1, column=0, padx=20, pady=(0, 15), sticky="s")
+        bottom_frame.grid(row=1, column=0, padx=20, pady=(0, 12), sticky="s")
         bottom_frame.grid_columnconfigure(0, weight=1)
         
         btn_sumatra = customtkinter.CTkButton(bottom_frame, text="⚙️ Configurar SumatraPDF", command=self.configurar_ruta_sumatra_manualmente, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, height=30)
-        btn_sumatra.grid(row=0, column=0, sticky="ew", pady=(0,10))
+        btn_sumatra.grid(row=0, column=0, sticky="ew", pady=(0,8))
         
         lbl_author = customtkinter.CTkLabel(bottom_frame, text="OmniTag Mobile • Micael Cedano", font=customtkinter.CTkFont(family="Segoe UI", size=10, slant="italic"), text_color="gray50")
         lbl_author.grid(row=1, column=0, sticky="w")
@@ -1233,6 +1305,19 @@ class OmniTagMobileApp(customtkinter.CTk):
 
         # Excel Section
         self._setup_excel_view()
+
+    def refrescar_impresoras(self):
+        lista = obtener_lista_impresoras()
+        self.printer_combo.configure(values=lista)
+        actual = self.printer_var.get()
+        if actual not in lista:
+            pred = obtener_impresora_predeterminada()
+            self.printer_var.set(pred)
+            guardar_impresora_config(pred)
+        messagebox.showinfo("Impresoras", f"Lista de impresoras actualizada ({len(lista)} encontradas).")
+
+    def on_printer_selected(self, choice):
+        guardar_impresora_config(choice)
 
     def _setup_excel_view(self):
         self.excel_frame.grid_rowconfigure(4, weight=1)
@@ -1491,15 +1576,27 @@ class OmniTagMobileApp(customtkinter.CTk):
     def _enviar_a_impresora(self, pdf_path):
         if not os.path.exists(pdf_path): return
         current_os = platform.system()
+        printer_name = self.printer_var.get().strip() if hasattr(self, 'printer_var') else ""
+        guardar_impresora_config(printer_name)
+        
         try:
             if current_os == "Windows":
                 if SUMATRA_PDF_PATH and os.path.exists(SUMATRA_PDF_PATH):
-                    subprocess.Popen([SUMATRA_PDF_PATH, "-print-to-default", "-silent", pdf_path])
+                    if printer_name and printer_name != "Impresora Predeterminada":
+                        subprocess.Popen([SUMATRA_PDF_PATH, "-print-to", printer_name, "-silent", pdf_path])
+                    else:
+                        subprocess.Popen([SUMATRA_PDF_PATH, "-print-to-default", "-silent", pdf_path])
                 else:
-                    os.startfile(pdf_path, "print")
+                    if printer_name and printer_name != "Impresora Predeterminada" and WIN32PRINT_AVAILABLE:
+                        win32api.ShellExecute(0, "printto", pdf_path, f'"{printer_name}"', ".", 0)
+                    else:
+                        os.startfile(pdf_path, "print")
             elif current_os in ["Darwin", "Linux"]:
-                cmd = "lpr" if current_os == "Darwin" else "lp"
-                subprocess.run([cmd, pdf_path], check=True)
+                cmd = ["lpr"] if current_os == "Darwin" else ["lp"]
+                if printer_name and printer_name != "Impresora Predeterminada":
+                    cmd.extend(["-P", printer_name])
+                cmd.append(pdf_path)
+                subprocess.run(cmd, check=True)
         except Exception as e:
             messagebox.showerror("Error Impresión", f"No se pudo imprimir:\n{e}")
 
