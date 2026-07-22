@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
-echo Iniciando aplicacion...
-".venv\Scripts\python.exe" "etiqueta_iphone_2025.py"
+echo Iniciando OmniTag Mobile...
+".venv\Scripts\python.exe" "omnitag_mobile.py"
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Ocurrio un error al ejecutar la aplicacion.
