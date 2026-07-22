@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.1.0 (Selección de Impresora Personalizada + Formato 4x3)
+Versión: 4.1.1 (Mapeo Inteligente Serie Samsung S25 Ultra / S25+ / S25)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.1.0"
+CURRENT_VERSION = "v4.1.1"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -168,9 +168,10 @@ IPHONE_MODEL_MAPPING = {
     "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max", "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone 17 Plus",
 }
 
-# --- Mapeo Inteligente por Prefijos para Samsung ---
+# --- Mapeo Inteligente por Prefijos para Samsung (Incluye S25 Series) ---
 SAMSUNG_BASE_MAPPING = {
     # Z Flip Series
+    "SM-F751": "Samsung Galaxy Z Flip7",
     "SM-F741": "Samsung Galaxy Z Flip6",
     "SM-F731": "Samsung Galaxy Z Flip5",
     "SM-F721": "Samsung Galaxy Z Flip4",
@@ -179,12 +180,21 @@ SAMSUNG_BASE_MAPPING = {
     "SM-F700": "Samsung Galaxy Z Flip",
 
     # Z Fold Series
+    "SM-F966": "Samsung Galaxy Z Fold7",
     "SM-F956": "Samsung Galaxy Z Fold6",
     "SM-F946": "Samsung Galaxy Z Fold5",
     "SM-F936": "Samsung Galaxy Z Fold4",
     "SM-F926": "Samsung Galaxy Z Fold3",
     "SM-F916": "Samsung Galaxy Z Fold2",
     "SM-F900": "Samsung Galaxy Fold",
+
+    # S25 Series (2025)
+    "SM-S939": "Samsung Galaxy S25 Ultra",
+    "SM-S938": "Samsung Galaxy S25 Ultra",
+    "SM-S937": "Samsung Galaxy S25+",
+    "SM-S936": "Samsung Galaxy S25+",
+    "SM-S931": "Samsung Galaxy S25",
+    "SM-S934": "Samsung Galaxy S25 FE",
 
     # S24 Series
     "SM-S928": "Samsung Galaxy S24 Ultra",
@@ -254,6 +264,11 @@ SAMSUNG_BASE_MAPPING = {
 
 def resolver_nombre_android(brand, model_code, dev=None):
     model_upper = model_code.upper().strip()
+    
+    # Normalizar si el código omite el prefijo 'SM-' (ej. 'S939U' -> 'SM-S939U')
+    if not model_upper.startswith("SM-") and any(model_upper.startswith(p) for p in ["S9", "F7", "F9", "G9", "N9", "A0", "A1", "A2", "A3", "A5"]):
+        model_upper = "SM-" + model_upper
+
     if "SAMSUNG" in brand.upper() or model_upper.startswith("SM-"):
         for prefix, nombre_comercial in SAMSUNG_BASE_MAPPING.items():
             if model_upper.startswith(prefix):
@@ -914,7 +929,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title(f"OmniTag Mobile {CURRENT_VERSION} - Detección Multimarca & Etiquetas (4x3 Formato)")
+        self.title(f"OmniTag Mobile {CURRENT_VERSION} - Detección Multimarca & Etiquetas")
         self.geometry("1300x740")
         self.minsize(1200, 640)
         self.configure(fg_color=COLOR_BG_DARK)
@@ -941,7 +956,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Selección de Impresora & Formato 4x3'' • iPhone / Samsung / Pixel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Soporte S25 Series (S25 Ultra / S25+) • iPhone / Samsung / Pixel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
