@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.1 (Mejora de Lectura IMEI en Android + iOS + Auto-Updater)
+Versión: 4.0.2 (Mapeo Inteligente de Modelos Samsung Z Flip, Z Fold, S Series & A Series)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,7 +28,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.1"
+CURRENT_VERSION = "v4.0.2"
 GITHUB_REPO = "MicaelCedano/OmniTagMobile"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -103,17 +103,120 @@ IPHONE_MODEL_MAPPING = {
     "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max", "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone 17 Plus",
 }
 
-# Mapeo Modelos Android (Samsung / Pixel)
-SAMSUNG_MODEL_MAPPING = {
-    "SM-S928B": "Samsung Galaxy S24 Ultra", "SM-S928U": "Samsung Galaxy S24 Ultra",
-    "SM-S926B": "Samsung Galaxy S24+", "SM-S921B": "Samsung Galaxy S24",
-    "SM-S918B": "Samsung Galaxy S23 Ultra", "SM-S918U": "Samsung Galaxy S23 Ultra",
-    "SM-S916B": "Samsung Galaxy S23+", "SM-S911B": "Samsung Galaxy S23",
-    "SM-S908B": "Samsung Galaxy S22 Ultra", "SM-S901B": "Samsung Galaxy S22",
-    "SM-G998B": "Samsung Galaxy S21 Ultra", "SM-G991B": "Samsung Galaxy S21",
-    "SM-F946B": "Samsung Galaxy Z Fold5", "SM-F731B": "Samsung Galaxy Z Flip5",
-    "SM-F936B": "Samsung Galaxy Z Fold4", "SM-F721B": "Samsung Galaxy Z Flip4",
+# --- Mapeo Inteligente por Prefijos para Samsung ---
+SAMSUNG_BASE_MAPPING = {
+    # Z Flip Series
+    "SM-F741": "Samsung Galaxy Z Flip6",
+    "SM-F731": "Samsung Galaxy Z Flip5",
+    "SM-F721": "Samsung Galaxy Z Flip4",
+    "SM-F711": "Samsung Galaxy Z Flip3",
+    "SM-F707": "Samsung Galaxy Z Flip 5G",
+    "SM-F700": "Samsung Galaxy Z Flip",
+
+    # Z Fold Series
+    "SM-F956": "Samsung Galaxy Z Fold6",
+    "SM-F946": "Samsung Galaxy Z Fold5",
+    "SM-F936": "Samsung Galaxy Z Fold4",
+    "SM-F926": "Samsung Galaxy Z Fold3",
+    "SM-F916": "Samsung Galaxy Z Fold2",
+    "SM-F900": "Samsung Galaxy Fold",
+
+    # S24 Series
+    "SM-S928": "Samsung Galaxy S24 Ultra",
+    "SM-S926": "Samsung Galaxy S24+",
+    "SM-S921": "Samsung Galaxy S24",
+    "SM-S924": "Samsung Galaxy S24 FE",
+
+    # S23 Series
+    "SM-S918": "Samsung Galaxy S23 Ultra",
+    "SM-S916": "Samsung Galaxy S23+",
+    "SM-S911": "Samsung Galaxy S23",
+    "SM-S914": "Samsung Galaxy S23 FE",
+
+    # S22 Series
+    "SM-S908": "Samsung Galaxy S22 Ultra",
+    "SM-S906": "Samsung Galaxy S22+",
+    "SM-S901": "Samsung Galaxy S22",
+
+    # S21 Series
+    "SM-G998": "Samsung Galaxy S21 Ultra",
+    "SM-G996": "Samsung Galaxy S21+",
+    "SM-G991": "Samsung Galaxy S21",
+    "SM-G990": "Samsung Galaxy S21 FE",
+
+    # S20 Series
+    "SM-G988": "Samsung Galaxy S20 Ultra",
+    "SM-G986": "Samsung Galaxy S20+",
+    "SM-G981": "Samsung Galaxy S20",
+    "SM-G781": "Samsung Galaxy S20 FE",
+    "SM-G780": "Samsung Galaxy S20 FE",
+
+    # Note Series
+    "SM-N986": "Samsung Galaxy Note 20 Ultra",
+    "SM-N981": "Samsung Galaxy Note 20",
+    "SM-N975": "Samsung Galaxy Note 10+",
+    "SM-N970": "Samsung Galaxy Note 10",
+    "SM-N960": "Samsung Galaxy Note 9",
+    "SM-N950": "Samsung Galaxy Note 8",
+
+    # Galaxy A Series
+    "SM-A556": "Samsung Galaxy A55 5G",
+    "SM-A546": "Samsung Galaxy A54 5G",
+    "SM-A536": "Samsung Galaxy A53 5G",
+    "SM-A526": "Samsung Galaxy A52 5G",
+    "SM-A525": "Samsung Galaxy A52",
+    "SM-A515": "Samsung Galaxy A51",
+    "SM-A356": "Samsung Galaxy A35 5G",
+    "SM-A346": "Samsung Galaxy A34 5G",
+    "SM-A336": "Samsung Galaxy A33 5G",
+    "SM-A256": "Samsung Galaxy A25 5G",
+    "SM-A245": "Samsung Galaxy A24",
+    "SM-A156": "Samsung Galaxy A15 5G",
+    "SM-A155": "Samsung Galaxy A15",
+    "SM-A146": "Samsung Galaxy A14 5G",
+    "SM-A145": "Samsung Galaxy A14",
+    "SM-A136": "Samsung Galaxy A13 5G",
+    "SM-A135": "Samsung Galaxy A13",
+    "SM-A125": "Samsung Galaxy A12",
+    "SM-A105": "Samsung Galaxy A10",
+    "SM-A057": "Samsung Galaxy A05s",
+    "SM-A055": "Samsung Galaxy A05",
+    "SM-A047": "Samsung Galaxy A04s",
+    "SM-A045": "Samsung Galaxy A04",
+    "SM-A037": "Samsung Galaxy A03s",
+    "SM-A035": "Samsung Galaxy A03",
 }
+
+def resolver_nombre_android(brand, model_code, dev=None):
+    """
+    Resuelve el nombre comercial legible para Samsung, Pixel y otros Android.
+    """
+    model_upper = model_code.upper().strip()
+    
+    # 1. Mapeo para Samsung por prefijos (S, Z, Note, A)
+    if "SAMSUNG" in brand.upper() or model_upper.startswith("SM-"):
+        for prefix, nombre_comercial in SAMSUNG_BASE_MAPPING.items():
+            if model_upper.startswith(prefix):
+                return nombre_comercial
+                
+    # 2. Consultar nombre de mercado por ADB si disponible (ej. ro.product.marketname)
+    if dev:
+        try:
+            mname = dev.shell("getprop ro.product.marketname").strip()
+            if mname and len(mname) > 3:
+                return mname
+        except Exception: pass
+        try:
+            mname2 = dev.shell("getprop bluetooth.device.default_name").strip()
+            if mname2 and ("Galaxy" in mname2 or "Pixel" in mname2):
+                return mname2
+        except Exception: pass
+
+    # 3. Si el modelo ya incluye 'Pixel' o 'Galaxy'
+    if "PIXEL" in model_upper:
+        return f"Google {model_code}"
+        
+    return f"{brand} {model_upper}"
 
 INT_COLOR_MAP = {
     "1": "Black", "2": "White", "3": "Gold", "4": "Rose Gold", 
@@ -260,12 +363,8 @@ def cargar_fuentes_pdf():
     except Exception:
         RL_FONT_REGULAR_NAME = 'Helvetica'
 
-# --- Extraer IMEI en Android (Estrategias Multicapa) ---
+# --- Extraer IMEI en Android ---
 def obtener_imei_android(dev):
-    """
-    Intenta obtener el IMEI de 15 dígitos en dispositivos Android utilizando múltiples comandos ADB.
-    """
-    # 1. Comandos directos de Android modern (Android 10+)
     cmd_list = [
         "cmd phone get-imei",
         "cmd phone get-imei 0",
@@ -280,7 +379,6 @@ def obtener_imei_android(dev):
                 return digits[:15]
         except Exception: pass
 
-    # 2. Transacciones Parcel de 'service call iphonesubinfo'
     for code in [1, 2, 3, 4, 7]:
         try:
             out = dev.shell(f"service call iphonesubinfo {code}")
@@ -297,7 +395,6 @@ def obtener_imei_android(dev):
                     return digits[:15]
         except Exception: pass
 
-    # 3. Expresión regular en texto devuelto por service call
     for code in [1, 2, 3, 4, 7]:
         try:
             out = dev.shell(f"service call iphonesubinfo {code}")
@@ -309,7 +406,6 @@ def obtener_imei_android(dev):
                     return digits[:15]
         except Exception: pass
 
-    # 4. Dumpsys iphonesubinfo / telephony.registry
     try:
         out = dev.shell("dumpsys iphonesubinfo")
         match = re.search(r"(?:Device ID|IMEI|imei)\s*=\s*(\d{14,15})", out)
@@ -322,7 +418,6 @@ def obtener_imei_android(dev):
         if match: return match.group(1)
     except Exception: pass
 
-    # 5. Propiedades de sistema (getprop)
     props = [
         "gsm.baseband.imei", "ril.imei", "ril.IMEI", 
         "ro.ril.oem_imei", "persist.radio.imei", "gsm.imei1", "gsm.imei"
@@ -650,13 +745,13 @@ class UnifiedDeviceMonitor(threading.Thread):
                             brand = dev.shell("getprop ro.product.brand").strip().capitalize()
                             model_code = dev.shell("getprop ro.product.model").strip()
                             
-                            model_name = SAMSUNG_MODEL_MAPPING.get(model_code, f"{brand} {model_code}")
+                            # Resolver nombre legible (ej. SM-F731U -> Samsung Galaxy Z Flip5)
+                            model_name = resolver_nombre_android(brand, model_code, dev)
                             serial = dev.shell("getprop ro.serialno").strip() or udid
                             
-                            # Obtener IMEI mediante la función de estrategias avanzadas
                             imei = obtener_imei_android(dev)
                             if not imei:
-                                imei = serial # Fallback si el sistema Android bloquea IMEI
+                                imei = serial
 
                             capacidad = ""
                             try:
@@ -721,7 +816,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title("OmniTag Mobile v4.0.1 - Detección Multimarca & Etiquetas")
+        self.title("OmniTag Mobile v4.0.2 - Detección Multimarca & Etiquetas")
         self.geometry("1300x720")
         self.minsize(1200, 620)
         self.configure(fg_color=COLOR_BG_DARK)
