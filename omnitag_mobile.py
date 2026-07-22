@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.0.2 (Mapeo Inteligente de Modelos Samsung Z Flip, Z Fold, S Series & A Series)
+Versión: 4.0.3 (Solución de Guardado de Configuración Local en Modo .EXE Standalone)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -28,9 +28,33 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.0.2"
+CURRENT_VERSION = "v4.0.3"
 GITHUB_REPO = "MicaelCedano/OmniTagMobile"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+# --- Determinación de Rutas (Modo Script vs Modo PyInstaller .EXE) ---
+if getattr(sys, 'frozen', False):
+    # En ejecutable .exe, la carpeta de trabajo real es donde está el .exe
+    script_dir = os.path.dirname(os.path.abspath(sys.executable))
+    bundle_dir = getattr(sys, '_MEIPASS', script_dir)
+else:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    bundle_dir = script_dir
+
+CONFIG_FILE_NAME = os.path.join(script_dir, "etiqueta_config.json")
+EXCEL_FILE_NAME = os.path.join(script_dir, "plantilla_compra_iphone.xlsx")
+
+# Buscar fuentes primero en script_dir, luego en bundle_dir de PyInstaller
+def _get_asset_path(filename):
+    local_p = os.path.join(script_dir, filename)
+    if os.path.exists(local_p): return local_p
+    return os.path.join(bundle_dir, filename)
+
+FONT_BOLD_PATH_TTF = _get_asset_path("arialbd.ttf")
+FONT_REGULAR_PATH_TTF = _get_asset_path("arial.ttf")
+
+RL_FONT_BOLD_NAME = "ArialBoldRegistered"
+RL_FONT_REGULAR_NAME = "ArialRegularRegistered"
 
 # --- Dependencias iOS (pymobiledevice3) ---
 PYMOBILEDEVICE_AVAILABLE = False
@@ -62,21 +86,6 @@ try:
     PDF_SAVE_ENABLED = True
 except ImportError:
     print("ADVERTENCIA: ReportLab no instalado.")
-
-# --- Constantes de Ruta y Etiquetas ---
-script_dir = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE_NAME = os.path.join(script_dir, "etiqueta_config.json")
-EXCEL_FILE_NAME = os.path.join(script_dir, "plantilla_compra_iphone.xlsx")
-
-LABEL_WIDTH_INCHES = 4
-LABEL_HEIGHT_INCHES = 3
-PREVIEW_MAX_WIDTH = 380
-
-FONT_BOLD_PATH_TTF = os.path.join(script_dir, "arialbd.ttf")
-FONT_REGULAR_PATH_TTF = os.path.join(script_dir, "arial.ttf")
-
-RL_FONT_BOLD_NAME = "ArialBoldRegistered"
-RL_FONT_REGULAR_NAME = "ArialRegularRegistered"
 
 # --- Mapeo de Modelos de iPhone ---
 IPHONE_MODEL_MAPPING = {
@@ -188,31 +197,22 @@ SAMSUNG_BASE_MAPPING = {
 }
 
 def resolver_nombre_android(brand, model_code, dev=None):
-    """
-    Resuelve el nombre comercial legible para Samsung, Pixel y otros Android.
-    """
     model_upper = model_code.upper().strip()
-    
-    # 1. Mapeo para Samsung por prefijos (S, Z, Note, A)
     if "SAMSUNG" in brand.upper() or model_upper.startswith("SM-"):
         for prefix, nombre_comercial in SAMSUNG_BASE_MAPPING.items():
             if model_upper.startswith(prefix):
                 return nombre_comercial
                 
-    # 2. Consultar nombre de mercado por ADB si disponible (ej. ro.product.marketname)
     if dev:
         try:
             mname = dev.shell("getprop ro.product.marketname").strip()
-            if mname and len(mname) > 3:
-                return mname
+            if mname and len(mname) > 3: return mname
         except Exception: pass
         try:
             mname2 = dev.shell("getprop bluetooth.device.default_name").strip()
-            if mname2 and ("Galaxy" in mname2 or "Pixel" in mname2):
-                return mname2
+            if mname2 and ("Galaxy" in mname2 or "Pixel" in mname2): return mname2
         except Exception: pass
 
-    # 3. Si el modelo ya incluye 'Pixel' o 'Galaxy'
     if "PIXEL" in model_upper:
         return f"Google {model_code}"
         
@@ -273,6 +273,7 @@ def _write_config(config_data):
     try:
         with open(CONFIG_FILE_NAME, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=4)
+        print(f"--- Configuración guardada en: {CONFIG_FILE_NAME} ---")
     except Exception as e:
         print(f"Error guardando config: {e}")
 
@@ -290,7 +291,7 @@ def cargar_logo_config():
     logo_path = config.get("logo_path")
     if logo_path and os.path.exists(logo_path) and os.path.isfile(logo_path):
         return logo_path
-    return os.path.join(script_dir, "logo.png")
+    return _get_asset_path("logo.png")
 
 def guardar_logo_config(logo_path):
     if logo_path:
@@ -745,7 +746,6 @@ class UnifiedDeviceMonitor(threading.Thread):
                             brand = dev.shell("getprop ro.product.brand").strip().capitalize()
                             model_code = dev.shell("getprop ro.product.model").strip()
                             
-                            # Resolver nombre legible (ej. SM-F731U -> Samsung Galaxy Z Flip5)
                             model_name = resolver_nombre_android(brand, model_code, dev)
                             serial = dev.shell("getprop ro.serialno").strip() or udid
                             
@@ -816,7 +816,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         start_excel = cargar_excel_config()
         self.excel_manager = ExcelManager(start_excel)
         
-        self.title("OmniTag Mobile v4.0.2 - Detección Multimarca & Etiquetas")
+        self.title("OmniTag Mobile v4.0.3 - Detección Multimarca & Etiquetas")
         self.geometry("1300x720")
         self.minsize(1200, 620)
         self.configure(fg_color=COLOR_BG_DARK)
