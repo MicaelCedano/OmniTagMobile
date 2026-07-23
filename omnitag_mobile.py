@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.1.1 (Mapeo Inteligente Serie Samsung S25 Ultra / S25+ / S25)
+Versión: 4.2.0 (Actualizador Silencioso por updater.exe Independiente)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.1.1"
+CURRENT_VERSION = "v4.2.0"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -922,7 +922,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.current_udid = None
         self.current_device_info = None
         
-        # Variables de Actualización Estilo MCTools
+        # Variables de Actualización
         self.update_ready = False
         self.downloaded_new_exe = None
 
@@ -956,7 +956,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Soporte S25 Series (S25 Ultra / S25+) • iPhone / Samsung / Pixel", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Actualizador por updater.exe Independiente • Impresión 4x3''", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
@@ -983,7 +983,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         )
         self.btn_update.grid(row=0, column=1)
 
-        # Barra de progreso inline para actualización (Estilo MCTools)
+        # Barra de progreso inline para actualización
         self.update_progress = customtkinter.CTkProgressBar(self.header_frame, height=4, corner_radius=2, fg_color="#0F172A", progress_color="#06B6D4")
         self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 2))
         self.update_progress.set(0)
@@ -1018,11 +1018,11 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.after(100, self.force_preview_update)
         
-        # Chequeo automático de actualizaciones al iniciar (estilo MCTools)
+        # Chequeo automático de actualizaciones al iniciar
         self.after(1500, lambda: self.chequear_actualizaciones_async(manual=False))
 
     def on_closing(self):
-        """Intercepta el cierre de la app. Si hay una actualización lista, la aplica al salir."""
+        """Intercepta el cierre de la app. Si hay una actualización lista, lanza updater.exe."""
         if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None) and os.path.exists(self.downloaded_new_exe):
             self.ejecutar_instalacion_inmediata()
         else:
@@ -1037,7 +1037,7 @@ class OmniTagMobileApp(customtkinter.CTk):
                 except Exception: pass
                 os._exit(0)
 
-    # --- Lógica de Auto-Update Estilo MCTools ---
+    # --- Lógica de Auto-Update Mediante updater.exe Independiente ---
     def accion_boton_actualizacion(self):
         if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None):
             self.ejecutar_instalacion_inmediata()
@@ -1158,42 +1158,30 @@ class OmniTagMobileApp(customtkinter.CTk):
             
         try:
             current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
-            temp_dir = tempfile.gettempdir()
             new_exe = self.downloaded_new_exe
-            bat_path = os.path.join(temp_dir, "omnitag_updater.bat")
-            vbs_path = os.path.join(temp_dir, "omnitag_launcher.vbs")
             
-            exe_basename = os.path.basename(current_exe)
-            bat_lines = [
-                "@echo off",
-                ":wait_exit",
-                "ping 127.0.0.1 -n 2 >nul",
-                f'tasklist /FI "IMAGENAME eq {exe_basename}" 2>nul | find /I "{exe_basename}" >nul',
-                "if not errorlevel 1 goto wait_exit",
-                "ping 127.0.0.1 -n 3 >nul",
-                ":retry_copy",
-                f'copy /Y "{new_exe}" "{current_exe}" >nul 2>&1 || goto retry_copy',
-                "ping 127.0.0.1 -n 2 >nul",
-                f'start "" "{current_exe}"',
-                "ping 127.0.0.1 -n 2 >nul",
-                f'if exist "{vbs_path}" del /F /Q "{vbs_path}" >nul 2>&1',
-                f'if exist "{new_exe}" del /F /Q "{new_exe}" >nul 2>&1',
-                '(goto) 2>nul & del "%~f0" >nul 2>&1'
-            ]
+            updater_exe = _get_asset_path("updater.exe")
+            temp_dir = tempfile.gettempdir()
+            target_updater = os.path.join(temp_dir, "omnitag_updater_runner.exe")
             
-            with open(bat_path, 'w', encoding='cp1252') as f:
-                f.write("\r\n".join(bat_lines))
-                
-            vbs_code = f'CreateObject("WScript.Shell").Run Chr(34) & "{bat_path}" & Chr(34), 0, False'
-            with open(vbs_path, 'w', encoding='cp1252') as f:
-                f.write(vbs_code)
-                
+            if os.path.exists(updater_exe):
+                import shutil
+                shutil.copy2(updater_exe, target_updater)
+            else:
+                target_updater = updater_exe
+
+            if not os.path.exists(target_updater):
+                messagebox.showerror("Error", "No se encontró el actualizador (updater.exe).")
+                return
+
             if self.device_monitor: self.device_monitor.stop()
-            subprocess.Popen(['wscript.exe', vbs_path])
+            
+            # Lanzar el proceso de updater.exe en segundo plano de forma independiente
+            subprocess.Popen([target_updater, "--new", new_exe, "--target", current_exe])
             time.sleep(0.3)
             os._exit(0)
         except Exception as e:
-            messagebox.showerror("Error de Instalación", f"No se pudo iniciar la actualización:\n{e}")
+            messagebox.showerror("Error de Instalación", f"No se pudo iniciar updater.exe:\n{e}")
 
     # --- UI Base ---
     def _setup_ui(self):
