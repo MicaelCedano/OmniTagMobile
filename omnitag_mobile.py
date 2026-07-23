@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.2.0 (Actualizador Silencioso por updater.exe Independiente)
+Versión: 4.3.0 (Nuevo Logo Institucional & Ícono .ICO Integrados)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.2.0"
+CURRENT_VERSION = "v4.3.0"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -265,7 +265,6 @@ SAMSUNG_BASE_MAPPING = {
 def resolver_nombre_android(brand, model_code, dev=None):
     model_upper = model_code.upper().strip()
     
-    # Normalizar si el código omite el prefijo 'SM-' (ej. 'S939U' -> 'SM-S939U')
     if not model_upper.startswith("SM-") and any(model_upper.startswith(p) for p in ["S9", "F7", "F9", "G9", "N9", "A0", "A1", "A2", "A3", "A5"]):
         model_upper = "SM-" + model_upper
 
@@ -922,6 +921,12 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.current_udid = None
         self.current_device_info = None
         
+        # Establecer Ícono .ICO en la Ventana de Windows
+        app_icon_p = _get_asset_path("app_icon.ico")
+        if os.path.exists(app_icon_p) and platform.system() == "Windows":
+            try: self.iconbitmap(app_icon_p)
+            except Exception: pass
+
         # Variables de Actualización
         self.update_ready = False
         self.downloaded_new_exe = None
@@ -956,7 +961,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Actualizador por updater.exe Independiente • Impresión 4x3''", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Ícono & Logo Institucionales • Detección Automática & Impresión 4x3''", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
