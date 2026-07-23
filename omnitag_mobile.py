@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.3.0 (Nuevo Logo Institucional & Ícono .ICO Integrados)
+Versión: 4.4.0 (Detección Exhaustiva de SumatraPDF desde Registro/Rutas/PATH - Estilo MCTools)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.3.0"
+CURRENT_VERSION = "v4.4.0"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -383,43 +383,92 @@ def guardar_impresora_config(printer_name):
         config["selected_printer"] = printer_name
         _write_config(config)
 
-def cargar_excel_config():
-    config = _read_config()
-    path = config.get("last_excel_path")
-    if path and os.path.exists(path) and os.path.isfile(path):
-        return path
-    return EXCEL_FILE_NAME
-
-def guardar_excel_config(excel_path):
-    if excel_path:
-        config = _read_config()
-        config["last_excel_path"] = excel_path
-        _write_config(config)
-
 def guardar_config_sumatra():
     if SUMATRA_PDF_PATH and platform.system() == "Windows":
         config = _read_config()
         config["sumatra_pdf_path"] = SUMATRA_PDF_PATH
         _write_config(config)
 
+# --- DETECCIÓN EXHAUSTIVA DE SUMATRA PDF (DESDE MCTOOLS) ---
 def detectar_sumatra_si_no_configurado():
+    """Intenta encontrar SumatraPDF en todas las rutas comunes de Windows, registros y PATH (Lógica exacta de MCTools)."""
     global SUMATRA_PDF_PATH
-    if SUMATRA_PDF_PATH or platform.system() != "Windows": return
-    paths = [
-        "SumatraPDF.exe",
-        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "SumatraPDF", "SumatraPDF.exe"),
-        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "SumatraPDF", "SumatraPDF.exe"),
+    if SUMATRA_PDF_PATH and os.path.exists(SUMATRA_PDF_PATH) and os.path.isfile(SUMATRA_PDF_PATH):
+        return SUMATRA_PDF_PATH
+
+    if platform.system() != "Windows":
+        return None
+
+    user_profile = os.environ.get("USERPROFILE", "")
+    program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    app_data = os.environ.get("APPDATA", "")
+    current_exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+
+    SUMATRA_PDF_CANDIDATE_PATHS = [
+        os.path.join(current_exe_dir, "SumatraPDF.exe"),
+        os.path.join(script_dir, "SumatraPDF.exe"),
+        os.path.join(local_app_data, "SumatraPDF", "SumatraPDF.exe"),
+        os.path.join(program_files, "SumatraPDF", "SumatraPDF.exe"),
+        os.path.join(program_files_x86, "SumatraPDF", "SumatraPDF.exe"),
+        os.path.join(app_data, "SumatraPDF", "SumatraPDF.exe"),
+        os.path.join(user_profile, "Downloads", "SumatraPDF.exe"),
+        os.path.join(user_profile, "Desktop", "SumatraPDF.exe"),
+        "C:\\SumatraPDF\\SumatraPDF.exe",
+        "SumatraPDF.exe"
     ]
-    for p in paths:
-        try:
-            res = subprocess.run(["where", os.path.basename(p)], capture_output=True, text=True, check=False, shell=True)
-            if res.returncode == 0 and res.stdout.strip():
-                SUMATRA_PDF_PATH = res.stdout.strip().splitlines()[0]
-                return
-            elif os.path.exists(p) and os.path.isfile(p):
-                SUMATRA_PDF_PATH = p
-                return
-        except Exception: pass
+
+    # 1. Probar candidato por candidato en disco
+    for path_candidate in SUMATRA_PDF_CANDIDATE_PATHS:
+        if path_candidate and os.path.exists(path_candidate) and os.path.isfile(path_candidate):
+            SUMATRA_PDF_PATH = path_candidate
+            print(f"SumatraPDF detectado automáticamente en: {SUMATRA_PDF_PATH}")
+            guardar_config_sumatra()
+            return SUMATRA_PDF_PATH
+
+    # 2. Buscar en el PATH del sistema usando 'where'
+    try:
+        result = subprocess.run(["where", "SumatraPDF.exe"], capture_output=True, text=True, check=False, shell=True)
+        if result.returncode == 0 and result.stdout.strip():
+            found_path = result.stdout.strip().splitlines()[0]
+            if os.path.exists(found_path) and os.path.isfile(found_path):
+                SUMATRA_PDF_PATH = found_path
+                print(f"SumatraPDF detectado en el PATH: {SUMATRA_PDF_PATH}")
+                guardar_config_sumatra()
+                return SUMATRA_PDF_PATH
+    except Exception: pass
+
+    # 3. Buscar en el Registro de Windows (App Paths / Uninstall)
+    try:
+        import winreg
+        keys_to_check = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\SumatraPDF.exe"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\SumatraPDF.exe"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\SumatraPDF"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\SumatraPDF")
+        ]
+        for root_key, subkey in keys_to_check:
+            try:
+                with winreg.OpenKey(root_key, subkey) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val and os.path.exists(val) and os.path.isfile(val):
+                        SUMATRA_PDF_PATH = val
+                        print(f"SumatraPDF detectado en Registro: {SUMATRA_PDF_PATH}")
+                        guardar_config_sumatra()
+                        return SUMATRA_PDF_PATH
+            except Exception: continue
+    except Exception: pass
+
+    return None
+
+def es_sumatra_configurado():
+    """Retorna True si SumatraPDF está configurado/detectado y existe en disco."""
+    global SUMATRA_PDF_PATH
+    if SUMATRA_PDF_PATH and os.path.exists(SUMATRA_PDF_PATH) and os.path.isfile(SUMATRA_PDF_PATH):
+        return True
+    path = detectar_sumatra_si_no_configurado()
+    return bool(path and os.path.exists(path) and os.path.isfile(path))
 
 def cleanup_temp_files():
     for temp_file_path in list(temporary_files_to_delete):
@@ -961,7 +1010,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         lbl_main_title = customtkinter.CTkLabel(title_box, text="OMNITAG MOBILE", font=customtkinter.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         lbl_main_title.pack(anchor="w")
         
-        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Ícono & Logo Institucionales • Detección Automática & Impresión 4x3''", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
+        lbl_sub_title = customtkinter.CTkLabel(title_box, text=f"{CURRENT_VERSION} • Detección SumatraPDF desde MCTools • Impresión 4x3''", font=customtkinter.CTkFont(family="Segoe UI", size=11), text_color=COLOR_TEXT_SECONDARY)
         lbl_sub_title.pack(anchor="w")
         
         # Header Derecho: Badge Estado + Botón de Actualización
@@ -1587,13 +1636,15 @@ class OmniTagMobileApp(customtkinter.CTk):
         printer_name = self.printer_var.get().strip() if hasattr(self, 'printer_var') else ""
         guardar_impresora_config(printer_name)
         
+        sumatra_exe = detectar_sumatra_si_no_configurado()
+        
         try:
             if current_os == "Windows":
-                if SUMATRA_PDF_PATH and os.path.exists(SUMATRA_PDF_PATH):
+                if sumatra_exe and os.path.exists(sumatra_exe):
                     if printer_name and printer_name != "Impresora Predeterminada":
-                        subprocess.Popen([SUMATRA_PDF_PATH, "-print-to", printer_name, "-silent", pdf_path])
+                        subprocess.Popen([sumatra_exe, "-print-to", printer_name, "-silent", pdf_path])
                     else:
-                        subprocess.Popen([SUMATRA_PDF_PATH, "-print-to-default", "-silent", pdf_path])
+                        subprocess.Popen([sumatra_exe, "-print-to-default", "-silent", pdf_path])
                 else:
                     if printer_name and printer_name != "Impresora Predeterminada" and WIN32PRINT_AVAILABLE:
                         win32api.ShellExecute(0, "printto", pdf_path, f'"{printer_name}"', ".", 0)
