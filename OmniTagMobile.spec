@@ -32,6 +32,7 @@ exe = EXE(
     a.datas,
     [],
     name='OmniTagMobile',
+    icon='app_icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
