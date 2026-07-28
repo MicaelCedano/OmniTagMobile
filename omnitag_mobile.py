@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.0"
+CURRENT_VERSION = "v4.4.1"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -1213,29 +1213,51 @@ class OmniTagMobileApp(customtkinter.CTk):
         try:
             current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
             new_exe = self.downloaded_new_exe
-            
-            updater_exe = _get_asset_path("updater.exe")
-            temp_dir = tempfile.gettempdir()
-            target_updater = os.path.join(temp_dir, "omnitag_updater_runner.exe")
-            
-            if os.path.exists(updater_exe):
-                import shutil
-                shutil.copy2(updater_exe, target_updater)
-            else:
-                target_updater = updater_exe
-
-            if not os.path.exists(target_updater):
-                messagebox.showerror("Error", "No se encontró el actualizador (updater.exe).")
-                return
+            exe_dir = os.path.dirname(current_exe)
+            exe_name = os.path.basename(current_exe)
+            exe_short = exe_name.replace('.exe', '')
 
             if self.device_monitor: self.device_monitor.stop()
-            
-            # Lanzar el proceso de updater.exe en segundo plano de forma independiente
-            subprocess.Popen([target_updater, "--new", new_exe, "--target", current_exe])
-            time.sleep(0.3)
+
+            # --- Batch helper pattern (validado en MCTools) ---
+            # 1. Crear batch que espera a que este proceso muera, reemplaza y relanza
+            bat_path = os.path.join(exe_dir, "_update_helper.bat")
+            bat_lines = [
+                "@echo off",
+                "chcp 65001 >nul 2>&1",
+                "",
+                ":wait",
+                "ping 127.0.0.1 -n 2 >nul",
+                'tasklist /FI "IMAGENAME eq ' + exe_name + '" 2>nul | find /I "' + exe_short + '" >nul',
+                "if not errorlevel 1 goto wait",
+                "",
+                'move /Y "' + new_exe + '" "' + current_exe + '" >nul 2>&1',
+                "",
+                'start "" "' + current_exe + '"',
+                "",
+                '(goto) 2>nul & del "%~f0" >nul 2>&1',
+            ]
+            bat_content = (chr(13)+chr(10)).join(bat_lines)
+            with open(bat_path, 'w', newline='') as f:
+                f.write(bat_content)
+
+            # 2. Crear VBS que lanza el batch oculto (sin consola)
+            vbs_path = os.path.join(exe_dir, "_update_helper.vbs")
+            vbs_code = 'CreateObject("WScript.Shell").Run "' + bat_path + '", 0, False'
+            with open(vbs_path, 'w', newline='') as f:
+                f.write(vbs_code)
+
+            # 3. Lanzar VBS con wscript.exe (invisible)
+            subprocess.Popen(
+                ['wscript.exe', vbs_path],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                close_fds=True
+            )
+
+            # 4. Cerrar esta instancia — el batch helper se encarga del resto
             os._exit(0)
         except Exception as e:
-            messagebox.showerror("Error de Instalación", f"No se pudo iniciar updater.exe:\n{e}")
+            messagebox.showerror("Error de Instalación", f"No se pudo iniciar la actualización:\n{e}")
 
     # --- UI Base ---
     def _setup_ui(self):
