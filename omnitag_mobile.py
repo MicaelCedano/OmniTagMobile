@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.2"
+CURRENT_VERSION = "v4.4.3"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
