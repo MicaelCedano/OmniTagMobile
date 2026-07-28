@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.1"
+CURRENT_VERSION = "v4.4.2"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -376,6 +376,19 @@ def cargar_impresora_config():
     if p_name and p_name in lista:
         return p_name
     return obtener_impresora_predeterminada()
+
+def cargar_excel_config():
+    config = _read_config()
+    path = config.get("excel_path")
+    if path and os.path.exists(path) and os.path.isfile(path):
+        return path
+    return EXCEL_FILE_NAME
+
+def guardar_excel_config(filepath):
+    if filepath:
+        config = _read_config()
+        config["excel_path"] = filepath
+        _write_config(config)
 
 def guardar_impresora_config(printer_name):
     if printer_name:
@@ -764,11 +777,17 @@ class ExcelManager:
 
     def registrar_dispositivo(self, imei, modelo_completo):
         try:
+            # Validar formato IMEI (14-16 dígitos)
+            imei_str = str(imei).strip()
+            digitos = ''.join(c for c in imei_str if c.isdigit())
+            if len(digitos) < 14:
+                return False, f"IMEI inválido: {imei_str} (menos de 14 dígitos)", -1
+            
             try: df = pd.read_excel(self.filepath)
             except FileNotFoundError: df = pd.DataFrame(columns=["IMEI", "Modelo"])
             
             df['IMEI'] = df['IMEI'].astype(str)
-            if str(imei) in df['IMEI'].values:
+            if imei_str in df['IMEI'].values:
                 return False, f"El IMEI {imei} ya está registrado.", len(df)
 
             new_row = pd.DataFrame([{"IMEI": str(imei), "Modelo": modelo_completo}])
@@ -1076,7 +1095,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.after(1500, lambda: self.chequear_actualizaciones_async(manual=False))
 
     def on_closing(self):
-        """Intercepta el cierre de la app. Si hay una actualización lista, lanza updater.exe."""
+        """Intercepta el cierre de la app. Si hay una actualización lista, aplica con batch helper."""
         if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None) and os.path.exists(self.downloaded_new_exe):
             self.ejecutar_instalacion_inmediata()
         else:
