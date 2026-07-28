@@ -37,7 +37,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.4"
+CURRENT_VERSION = "v4.4.5"
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
 
@@ -978,6 +978,161 @@ COLOR_ACCENT_SECONDARY_HOVER = "#475569"
 COLOR_ACCENT_DANGER = "#EF4444"
 COLOR_ACCENT_DANGER_HOVER = "#DC2626"
 
+
+# --- Diálogos de Actualización (estilo MCTools) ---
+class VentanaActualizacionDisponible(customtkinter.CTkToplevel):
+    def __init__(self, parent, nueva_version, changelog, exe_url, exe_name, html_url):
+        super().__init__(parent)
+        self.parent = parent
+        self.nueva_version = nueva_version
+        self.exe_url = exe_url
+        self.exe_name = exe_name
+        self.html_url = html_url
+        
+        self.title("Actualización Disponible")
+        self.geometry("520x450")
+        self.resizable(False, False)
+        self.configure(fg_color=COLOR_BG_DARK)
+        
+        self.transient(parent)
+        self.grab_set()
+        
+        self.update_idletasks()
+        p_w = parent.winfo_width()
+        p_h = parent.winfo_height()
+        p_x = parent.winfo_x()
+        p_y = parent.winfo_y()
+        x = p_x + (p_w - 520) // 2
+        y = p_y + (p_h - 450) // 2
+        self.geometry(f"520x450+{x}+{y}")
+        
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        
+        header_label = customtkinter.CTkLabel(
+            self, 
+            text="\u2728 \u00a1Nueva actualizaci\u00f3n disponible! \u2728", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#06B6D4"
+        )
+        header_label.grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
+        
+        version_label = customtkinter.CTkLabel(
+            self, 
+            text=f"Versi\u00f3n actual: {CURRENT_VERSION}  \u279c  Nueva versi\u00f3n: {nueva_version}", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLOR_TEXT_SECONDARY
+        )
+        version_label.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
+        
+        changelog_frame = customtkinter.CTkFrame(self, fg_color=COLOR_CARD_BG, border_width=1, border_color=COLOR_CARD_BORDER, corner_radius=12)
+        changelog_frame.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        changelog_frame.grid_rowconfigure(1, weight=1)
+        changelog_frame.grid_columnconfigure(0, weight=1)
+        
+        customtkinter.CTkLabel(
+            changelog_frame, 
+            text="\u00bfQu\u00e9 hay de nuevo?", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#64748B"
+        ).grid(row=0, column=0, padx=15, pady=(8, 2), sticky="w")
+        
+        self.textbox = customtkinter.CTkTextbox(
+            changelog_frame, 
+            font=customtkinter.CTkFont(size=11), 
+            fg_color=COLOR_BG_DARK, 
+            text_color=COLOR_TEXT_PRIMARY, 
+            border_width=0, 
+            corner_radius=8
+        )
+        self.textbox.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
+        
+        clean_changelog = changelog.strip() if changelog else "No se proporcionaron detalles sobre esta versi\u00f3n."
+        self.textbox.insert("1.0", clean_changelog)
+        self.textbox.configure(state="disabled")
+        
+        buttons_frame = customtkinter.CTkFrame(self, fg_color="transparent")
+        buttons_frame.grid(row=3, column=0, padx=20, pady=20, sticky="ew")
+        buttons_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        self.cancel_btn = customtkinter.CTkButton(
+            buttons_frame, 
+            text="Cancelar", 
+            fg_color=COLOR_ACCENT_SECONDARY, 
+            hover_color=COLOR_ACCENT_SECONDARY_HOVER, 
+            text_color=COLOR_TEXT_PRIMARY, 
+            font=customtkinter.CTkFont(family="Segoe UI", size=13, weight="bold"), 
+            height=40, 
+            corner_radius=10, 
+            command=self.destroy
+        )
+        self.cancel_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+        
+        action_text = "Instalar ahora" if (getattr(sys, 'frozen', False) and exe_url) else "Ver en GitHub"
+        self.update_btn = customtkinter.CTkButton(
+            buttons_frame, 
+            text=action_text, 
+            fg_color=COLOR_ACCENT_PRIMARY, 
+            hover_color=COLOR_ACCENT_PRIMARY_HOVER, 
+            text_color="#FFFFFF", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=13, weight="bold"), 
+            height=40, 
+            corner_radius=10, 
+            command=self.proceder_actualizacion
+        )
+        self.update_btn.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+        
+    def proceder_actualizacion(self):
+        self.destroy()
+        if getattr(sys, 'frozen', False) and self.exe_url:
+            self.parent.iniciar_descarga_actualizacion(self.exe_url, self.exe_name, self.nueva_version)
+        else:
+            import webbrowser
+            webbrowser.open(self.html_url)
+
+class VentanaProgresoActualizacion(customtkinter.CTkToplevel):
+    def __init__(self, parent, version_nueva):
+        super().__init__(parent)
+        self.title("Actualizando OmniTag Mobile")
+        self.geometry("400x150")
+        self.resizable(False, False)
+        self.configure(fg_color=COLOR_BG_DARK)
+        
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        
+        self.update_idletasks()
+        p_w = parent.winfo_width()
+        p_h = parent.winfo_height()
+        p_x = parent.winfo_x()
+        p_y = parent.winfo_y()
+        x = p_x + (p_w - 400) // 2
+        y = p_y + (p_h - 150) // 2
+        self.geometry(f"400x150+{x}+{y}")
+        
+        self.grid_columnconfigure(0, weight=1)
+        
+        self.label = customtkinter.CTkLabel(
+            self, 
+            text=f"Descargando versi\u00f3n {version_nueva}...", 
+            font=customtkinter.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY
+        )
+        self.label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        
+        self.progress_bar = customtkinter.CTkProgressBar(self, width=320)
+        self.progress_bar.grid(row=1, column=0, padx=20, pady=10)
+        self.progress_bar.set(0)
+        
+        self.status_label = customtkinter.CTkLabel(self, text="Conectando con GitHub...", text_color=COLOR_TEXT_SECONDARY)
+        self.status_label.grid(row=2, column=0, padx=20, pady=(0, 20))
+        
+    def actualizar_progreso(self, valor, texto_status):
+        self.progress_bar.set(valor)
+        self.status_label.configure(text=texto_status)
+
+
 # --- Aplicación Principal ---
 class OmniTagMobileApp(customtkinter.CTk):
     def __init__(self):
@@ -1056,11 +1211,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         )
         self.btn_update.grid(row=0, column=1)
 
-        # Barra de progreso inline para actualización
-        self.update_progress = customtkinter.CTkProgressBar(self.header_frame, height=4, corner_radius=2, fg_color="#0F172A", progress_color="#06B6D4")
-        self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 2))
-        self.update_progress.set(0)
-        self.update_progress.grid_remove()
+
 
         # Contenedores Principales
         self.controls_frame = customtkinter.CTkFrame(self, width=320, fg_color=COLOR_CARD_BG, corner_radius=16, border_width=1, border_color=COLOR_CARD_BORDER)
@@ -1146,16 +1297,19 @@ class OmniTagMobileApp(customtkinter.CTk):
             if parse_version(latest_version) > parse_version(current_ver):
                 assets = data.get("assets", [])
                 exe_url = None
+                exe_name = None
                 for asset in assets:
                     name = asset.get("name", "")
                     if name.endswith(".exe"):
                         exe_url = asset.get("browser_download_url")
+                        exe_name = name
                         break
                 
-                if exe_url and getattr(sys, 'frozen', False):
-                    self.after(100, lambda: self.iniciar_descarga_inline(exe_url, latest_version_tag))
-                else:
-                    self.after(100, lambda: self.btn_update.configure(text="¡Nueva v" + latest_version + "!", fg_color="#EF4444", state="normal"))
+                html_url = data.get("html_url", f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases")
+                changelog_text = data.get("body", "")
+                
+                self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
+                self.after(100, lambda: self.mostrar_dialogo_actualizacion(latest_version_tag, changelog_text, exe_url, exe_name, html_url))
             else:
                 self.after(100, lambda: self.btn_update.configure(text="Al día", fg_color="#10B981", state="normal"))
                 if manual:
@@ -1168,21 +1322,33 @@ class OmniTagMobileApp(customtkinter.CTk):
         finally:
             self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
 
-    def iniciar_descarga_inline(self, exe_url, nueva_version_tag):
-        self.btn_update.configure(text="Descargando 0%", fg_color="#0284C7", state="disabled")
-        self.update_progress.grid()
-        self.update_progress.set(0)
-        
-        thread = threading.Thread(target=self._hilo_descarga_inline, args=(exe_url, nueva_version_tag))
+    def mostrar_dialogo_actualizacion(self, nueva_version, changelog, exe_url, exe_name, html_url):
+        """Muestra el diálogo con la nueva versión y changelog (estilo MCTools)."""
+        if hasattr(self, 'ventana_actualizacion') and self.ventana_actualizacion and self.ventana_actualizacion.winfo_exists():
+            return
+        self.ventana_actualizacion = VentanaActualizacionDisponible(self, nueva_version, changelog, exe_url, exe_name, html_url)
+
+    def iniciar_descarga_actualizacion(self, exe_url, exe_name, nueva_version):
+        """Crea la ventana de progreso e inicia la descarga."""
+        ventana_progreso = VentanaProgresoActualizacion(self, nueva_version)
+        thread = threading.Thread(
+            target=self._hilo_descarga_reemplazo,
+            args=(exe_url, exe_name, ventana_progreso)
+        )
         thread.daemon = True
         thread.start()
 
-    def _hilo_descarga_inline(self, exe_url, nueva_version_tag):
+    def _hilo_descarga_reemplazo(self, exe_url, exe_name, ventana_progreso):
         try:
-            temp_dir = tempfile.gettempdir()
-            new_exe = os.path.join(temp_dir, f"omnitag_update_{int(time.time())}.exe")
+            current_exe = sys.executable
+            exe_dir = os.path.dirname(current_exe)
+            new_exe = os.path.join(exe_dir, f"{exe_name}.new")
             
-            req = urllib.request.Request(exe_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            req = urllib.request.Request(
+                exe_url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            
             with urllib.request.urlopen(req, timeout=45) as response:
                 total_size = int(response.info().get('Content-Length', 0))
                 bytes_downloaded = 0
@@ -1190,39 +1356,44 @@ class OmniTagMobileApp(customtkinter.CTk):
                 with open(new_exe, 'wb') as f:
                     while True:
                         chunk = response.read(8192)
-                        if not chunk: break
+                        if not chunk:
+                            break
                         f.write(chunk)
                         bytes_downloaded += len(chunk)
                         
                         if total_size > 0:
                             progreso = bytes_downloaded / total_size
                             porcentaje = int(progreso * 100)
-                            self.after(0, lambda p=progreso, pct=porcentaje: self._actualizar_progreso_inline(p, pct))
+                            descargado_mb = bytes_downloaded / (1024 * 1024)
+                            total_mb = total_size / (1024 * 1024)
+                            texto_status = f"Descargado {descargado_mb:.2f} MB de {total_mb:.2f} MB ({porcentaje}%)"
+                            self.after(0, lambda val=progreso, txt=texto_status: ventana_progreso.actualizar_progreso(val, txt))
             
-            self.after(0, lambda: self._finalizar_descarga_inline(nueva_version_tag, new_exe))
+            self.after(0, lambda: ventana_progreso.actualizar_progreso(1.0, "Instalando actualizaci\u00f3n..."))
+            
+            self.update_ready = True
+            self.downloaded_new_exe = new_exe
+            
+            self.after(100, self.ejecutar_instalacion_inmediata)
+            
         except Exception as e:
-            print(f"Error en descarga inline: {e}")
-            self.after(0, self._error_descarga_inline)
+            try:
+                if 'new_exe' in locals() and os.path.exists(new_exe):
+                    os.remove(new_exe)
+            except Exception:
+                pass
+            self.after(0, lambda err=e: self._mostrar_error_actualizacion(err, ventana_progreso))
 
-    def _actualizar_progreso_inline(self, progreso, porcentaje):
-        self.update_progress.set(progreso)
-        self.btn_update.configure(text=f"Descargando {porcentaje}%")
-
-    def _finalizar_descarga_inline(self, nueva_version_tag, new_exe):
-        self.update_progress.grid_remove()
-        self.update_ready = True
-        self.downloaded_new_exe = new_exe
-        self.btn_update.configure(
-            text="✨ Instalar ahora", 
-            fg_color="#10B981", 
-            hover_color="#059669", 
-            text_color="#FFFFFF",
-            state="normal"
+    def _mostrar_error_actualizacion(self, error, ventana_progreso):
+        try:
+            ventana_progreso.destroy()
+        except Exception:
+            pass
+        messagebox.showerror(
+            "Error de Actualizaci\u00f3n",
+            f"Ocurri\u00f3 un error al descargar la actualizaci\u00f3n:\\n\\n{error}"
         )
-
-    def _error_descarga_inline(self):
-        self.update_progress.grid_remove()
-        self.btn_update.configure(text="Buscar act.", fg_color="#334155", state="normal")
+        self.btn_update.configure(text="Buscar act.", fg_color=COLOR_ACCENT_SECONDARY, state="normal")
 
     def ejecutar_instalacion_inmediata(self):
         if not hasattr(self, 'downloaded_new_exe') or not self.downloaded_new_exe or not os.path.exists(self.downloaded_new_exe):
