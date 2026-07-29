@@ -40,7 +40,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.4"
+CURRENT_VERSION = "v4.5.5"
 
 
 
@@ -496,6 +496,38 @@ def es_sumatra_configurado():
         return True
     path = detectar_sumatra_si_no_configurado()
     return bool(path and os.path.exists(path) and os.path.isfile(path))
+
+def imprimir_pil_silencioso(pil_img, printer_name=None):
+    """Imprime una imagen PIL directamente a la impresora seleccionada mediante Windows GDI (100% silencioso)."""
+    if not pil_img: return False
+    try:
+        import win32print, win32ui, win32con
+        from PIL import ImageWin
+
+        if not printer_name or printer_name == "Impresora Predeterminada":
+            printer_name = win32print.GetDefaultPrinter()
+
+        hDC = win32ui.CreateDC()
+        hDC.CreatePrinterDC(printer_name)
+
+        printable_width = hDC.GetDeviceCaps(win32con.HORZRES)
+        printable_height = hDC.GetDeviceCaps(win32con.VERTRES)
+
+        hDC.StartDoc("OmniTag Label")
+        hDC.StartPage()
+
+        dib = ImageWin.Dib(pil_img)
+        dib.draw(hDC.GetHandleOutput(), (0, 0, printable_width, printable_height))
+
+        hDC.EndPage()
+        hDC.EndDoc()
+        hDC.DeleteDC()
+        print(f"Impresión silenciosa nativa enviada a: {printer_name}")
+        return True
+    except Exception as e:
+        print(f"Error en impresión silenciosa GDI: {e}")
+        return False
+
 
 def cleanup_temp_files():
     for temp_file_path in list(temporary_files_to_delete):
@@ -2064,12 +2096,13 @@ class OmniTagMobileApp(customtkinter.CTk):
                     messagebox.showerror("Error", f"No se pudo guardar:\n{e}")
 
         if imprimir_despues:
-            self._enviar_a_impresora(temp_pdf_path)
+            pil_img = _generar_etiqueta_pil_image(modelo_limpio, imei, "", self.logo_path_var.get().strip())
+            self._enviar_a_impresora(temp_pdf_path, pil_img)
             if self.auto_shutdown_var.get():
                 self.after(2000, self.intentar_apagar_dispositivo)
 
-    def _enviar_a_impresora(self, pdf_path):
-        if not os.path.exists(pdf_path): return
+    def _enviar_a_impresora(self, pdf_path, pil_img=None):
+        if not os.path.exists(pdf_path) and not pil_img: return
         current_os = platform.system()
         printer_name = self.printer_var.get().strip() if hasattr(self, 'printer_var') else ""
         guardar_impresora_config(printer_name)
@@ -2083,6 +2116,13 @@ class OmniTagMobileApp(customtkinter.CTk):
                         subprocess.Popen([sumatra_exe, "-print-to", printer_name, "-silent", pdf_path])
                     else:
                         subprocess.Popen([sumatra_exe, "-print-to-default", "-silent", pdf_path])
+                elif pil_img and WIN32PRINT_AVAILABLE:
+                    exito_gdi = imprimir_pil_silencioso(pil_img, printer_name)
+                    if not exito_gdi:
+                        if printer_name and printer_name != "Impresora Predeterminada":
+                            win32api.ShellExecute(0, "printto", pdf_path, f'"{printer_name}"', ".", 0)
+                        else:
+                            os.startfile(pdf_path, "print")
                 else:
                     if printer_name and printer_name != "Impresora Predeterminada" and WIN32PRINT_AVAILABLE:
                         win32api.ShellExecute(0, "printto", pdf_path, f'"{printer_name}"', ".", 0)
