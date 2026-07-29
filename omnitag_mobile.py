@@ -37,7 +37,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.8"
+CURRENT_VERSION = "v4.4.9"
+
 
 
 
