@@ -40,7 +40,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.0"
+CURRENT_VERSION = "v4.5.1"
+
 
 
 
@@ -1138,10 +1139,11 @@ class VentanaActualizacionDisponible(customtkinter.CTkToplevel):
     def proceder_actualizacion(self):
         self.destroy()
         if getattr(sys, 'frozen', False) and self.exe_url:
-            self.parent.iniciar_descarga_actualizacion(self.exe_url, self.exe_name, self.nueva_version)
+            self.parent.iniciar_descarga_inline(self.exe_url, self.nueva_version)
         else:
             import webbrowser
             webbrowser.open(self.html_url)
+
 
 class VentanaProgresoActualizacion(customtkinter.CTkToplevel):
     def __init__(self, parent, version_nueva):
@@ -1265,6 +1267,13 @@ class OmniTagMobileApp(customtkinter.CTk):
         )
         self.btn_update.grid(row=0, column=1)
 
+        # Barra de progreso integrada para descargas de actualización (inline, estilo MCTools)
+        self.update_progress = customtkinter.CTkProgressBar(self.header_frame, height=5, corner_radius=3, fg_color="#0F172A", progress_color="#6366F1")
+        self.update_progress.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 6))
+        self.update_progress.set(0)
+        self.update_progress.grid_remove()  # Oculta por defecto
+
+
 
 
         # Contenedores Principales
@@ -1315,15 +1324,28 @@ class OmniTagMobileApp(customtkinter.CTk):
                 except Exception: pass
                 os._exit(0)
 
-    # --- Lógica de Auto-Update Mediante updater.exe Independiente ---
+    # --- Lógica de Auto-Update Mediante updater.exe Independiente (Patrón MCTools) ---
+
     def accion_boton_actualizacion(self):
         if getattr(self, 'update_ready', False) and getattr(self, 'downloaded_new_exe', None):
             self.ejecutar_instalacion_inmediata()
+        elif hasattr(self, 'latest_exe_url') and self.latest_exe_url:
+            if hasattr(self, 'ventana_actualizacion') and self.ventana_actualizacion and self.ventana_actualizacion.winfo_exists():
+                self.ventana_actualizacion.lift()
+            else:
+                self.mostrar_dialogo_actualizacion(
+                    getattr(self, 'latest_version_tag', ''),
+                    getattr(self, 'latest_changelog', ''),
+                    self.latest_exe_url,
+                    getattr(self, 'latest_exe_name', ''),
+                    getattr(self, 'latest_html_url', '')
+                )
         else:
             self.chequear_actualizaciones_async(manual=True)
 
     def chequear_actualizaciones_async(self, manual=False):
-        if getattr(self, 'update_ready', False): return
+        if getattr(self, 'update_ready', False):
+            return
         if manual:
             self.btn_update.configure(text="Buscando...", fg_color="#334155", state="disabled")
         
@@ -1362,16 +1384,14 @@ class OmniTagMobileApp(customtkinter.CTk):
                 html_url = data.get("html_url", f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases")
                 changelog_text = data.get("body", "")
                 
-                self.after(100, lambda: self.btn_update.configure(text="Descargando...", fg_color="#334155", state="disabled"))
-                if exe_url:
-                    thread = threading.Thread(
-                        target=self._hilo_descarga_segundo_plano,
-                        args=(exe_url, exe_name, latest_version_tag)
-                    )
-                    thread.daemon = True
-                    thread.start()
-                else:
-                    self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
+                self.latest_exe_url = exe_url
+                self.latest_exe_name = exe_name
+                self.latest_version_tag = latest_version_tag
+                self.latest_changelog = changelog_text
+                self.latest_html_url = html_url
+                
+                self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", hover_color="#DC2626", state="normal"))
+                self.after(100, lambda: self.mostrar_dialogo_actualizacion(latest_version_tag, changelog_text, exe_url, exe_name, html_url))
             else:
                 self.after(100, lambda: self.btn_update.configure(text="Al día", fg_color="#10B981", state="normal"))
                 if manual:
@@ -1384,11 +1404,30 @@ class OmniTagMobileApp(customtkinter.CTk):
         finally:
             self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
 
-    def _hilo_descarga_segundo_plano(self, exe_url, exe_name, nueva_version):
-        """Descarga la nueva versión en segundo plano sin interrumpir al usuario."""
+    def mostrar_dialogo_actualizacion(self, nueva_version, changelog, exe_url, exe_name, html_url):
+        """Muestra el diálogo con la nueva versión y changelog (estilo MCTools)."""
+        if hasattr(self, 'ventana_actualizacion') and self.ventana_actualizacion and self.ventana_actualizacion.winfo_exists():
+            return
+        self.ventana_actualizacion = VentanaActualizacionDisponible(self, nueva_version, changelog, exe_url, exe_name, html_url)
+
+    def iniciar_descarga_inline(self, exe_url, nueva_version_tag):
+        """Inicia la descarga de la nueva versión mostrando la barra de progreso inline en el header."""
+        self.btn_update.configure(text="Descargando 0%", fg_color="#0284C7", hover_color="#0369A1", state="disabled")
+        self.update_progress.grid()
+        self.update_progress.set(0)
+        
+        thread = threading.Thread(
+            target=self._hilo_descarga_inline,
+            args=(exe_url, nueva_version_tag)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _hilo_descarga_inline(self, exe_url, nueva_version_tag):
         try:
             current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
             exe_dir = os.path.dirname(current_exe)
+            exe_name = os.path.basename(current_exe)
             new_exe = os.path.join(exe_dir, f"{exe_name}.new")
             
             req = urllib.request.Request(
@@ -1397,49 +1436,6 @@ class OmniTagMobileApp(customtkinter.CTk):
             )
             
             with urllib.request.urlopen(req, timeout=60) as response:
-                with open(new_exe, 'wb') as f:
-                    while True:
-                        chunk = response.read(8192)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-            
-            self.update_ready = True
-            self.downloaded_new_exe = new_exe
-            self.after(100, lambda: self.btn_update.configure(text="¡Instalar act.!", fg_color="#EF4444", state="normal"))
-        except Exception as e:
-            print(f"Error descargando actualización en segundo plano: {e}")
-            self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
-
-
-    def mostrar_dialogo_actualizacion(self, nueva_version, changelog, exe_url, exe_name, html_url):
-        """Muestra el diálogo con la nueva versión y changelog (estilo MCTools)."""
-        if hasattr(self, 'ventana_actualizacion') and self.ventana_actualizacion and self.ventana_actualizacion.winfo_exists():
-            return
-        self.ventana_actualizacion = VentanaActualizacionDisponible(self, nueva_version, changelog, exe_url, exe_name, html_url)
-
-    def iniciar_descarga_actualizacion(self, exe_url, exe_name, nueva_version):
-        """Crea la ventana de progreso e inicia la descarga."""
-        ventana_progreso = VentanaProgresoActualizacion(self, nueva_version)
-        thread = threading.Thread(
-            target=self._hilo_descarga_reemplazo,
-            args=(exe_url, exe_name, ventana_progreso)
-        )
-        thread.daemon = True
-        thread.start()
-
-    def _hilo_descarga_reemplazo(self, exe_url, exe_name, ventana_progreso):
-        try:
-            current_exe = sys.executable
-            exe_dir = os.path.dirname(current_exe)
-            new_exe = os.path.join(exe_dir, f"{exe_name}.new")
-            
-            req = urllib.request.Request(
-                exe_url, 
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            )
-            
-            with urllib.request.urlopen(req, timeout=45) as response:
                 total_size = int(response.info().get('Content-Length', 0))
                 bytes_downloaded = 0
                 
@@ -1454,38 +1450,40 @@ class OmniTagMobileApp(customtkinter.CTk):
                         if total_size > 0:
                             progreso = bytes_downloaded / total_size
                             porcentaje = int(progreso * 100)
-                            descargado_mb = bytes_downloaded / (1024 * 1024)
-                            total_mb = total_size / (1024 * 1024)
-                            texto_status = f"Descargado {descargado_mb:.2f} MB de {total_mb:.2f} MB ({porcentaje}%)"
-                            self.after(0, lambda val=progreso, txt=texto_status: ventana_progreso.actualizar_progreso(val, txt))
+                            self.after(0, lambda p=progreso, pct=porcentaje: self._actualizar_progreso_inline(p, pct))
             
-            self.after(0, lambda: ventana_progreso.actualizar_progreso(1.0, "Instalando actualizaci\u00f3n..."))
-            
-            self.update_ready = True
-            self.downloaded_new_exe = new_exe
-            
-            self.after(100, self.ejecutar_instalacion_inmediata)
+            self.after(0, lambda: self._finalizar_descarga_inline(nueva_version_tag, new_exe))
             
         except Exception as e:
-            try:
-                if 'new_exe' in locals() and os.path.exists(new_exe):
-                    os.remove(new_exe)
-            except Exception:
-                pass
-            self.after(0, lambda err=e: self._mostrar_error_actualizacion(err, ventana_progreso))
+            print(f"Error descargando actualización inline: {e}")
+            self.after(0, self._error_descarga_inline)
 
-    def _mostrar_error_actualizacion(self, error, ventana_progreso):
-        try:
-            ventana_progreso.destroy()
-        except Exception:
-            pass
-        messagebox.showerror(
-            "Error de Actualizaci\u00f3n",
-            f"Ocurri\u00f3 un error al descargar la actualizaci\u00f3n:\\n\\n{error}"
+    def _actualizar_progreso_inline(self, progreso, porcentaje):
+        self.update_progress.set(progreso)
+        self.btn_update.configure(text=f"Descargando {porcentaje}%")
+
+    def _finalizar_descarga_inline(self, nueva_version_tag, new_exe):
+        self.update_progress.grid_remove()
+        self.update_ready = True
+        self.downloaded_new_exe = new_exe
+        self.btn_update.configure(
+            text="✨ Instalar ahora", 
+            fg_color="#10B981", 
+            hover_color="#059669", 
+            text_color="#FFFFFF",
+            state="normal"
         )
-        self.btn_update.configure(text="Buscar act.", fg_color=COLOR_ACCENT_SECONDARY, state="normal")
+
+    def _error_descarga_inline(self):
+        self.update_progress.grid_remove()
+        self.btn_update.configure(text="Buscar act.", fg_color="#334155", state="normal")
+        messagebox.showerror(
+            "Error de Descarga",
+            "No se pudo descargar la actualización. Verifica tu conexión a internet e intenta de nuevo."
+        )
 
     def ejecutar_instalacion_inmediata(self):
+
         """Ejecuta la sustitución del ejecutable utilizando el actualizador independiente (updater.exe)."""
         if not hasattr(self, 'downloaded_new_exe') or not self.downloaded_new_exe or not os.path.exists(self.downloaded_new_exe):
             messagebox.showerror("Error", "No se encontró el archivo de actualización listo para instalar.")
