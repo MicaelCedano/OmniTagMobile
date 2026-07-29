@@ -40,7 +40,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.3"
+CURRENT_VERSION = "v4.5.4"
 
 
 
@@ -182,6 +182,8 @@ IPHONE_MODEL_MAPPING = {
 # --- Mapeo Inteligente por Prefijos para Samsung (Incluye S25 Series) ---
 SAMSUNG_BASE_MAPPING = {
     # Z Flip Series
+    "SM-F766": "Samsung Galaxy Z Flip7",
+    "SM-F761": "Samsung Galaxy Z Flip7",
     "SM-F751": "Samsung Galaxy Z Flip7",
     "SM-F741": "Samsung Galaxy Z Flip6",
     "SM-F731": "Samsung Galaxy Z Flip5",
@@ -192,6 +194,7 @@ SAMSUNG_BASE_MAPPING = {
 
     # Z Fold Series
     "SM-F966": "Samsung Galaxy Z Fold7",
+    "SM-F961": "Samsung Galaxy Z Fold7",
     "SM-F956": "Samsung Galaxy Z Fold6",
     "SM-F946": "Samsung Galaxy Z Fold5",
     "SM-F936": "Samsung Galaxy Z Fold4",
