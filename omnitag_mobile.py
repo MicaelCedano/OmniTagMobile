@@ -40,7 +40,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.2"
+CURRENT_VERSION = "v4.5.3"
+
 
 
 
@@ -934,34 +935,78 @@ def obtener_info_ios_unificada():
         finally:
             loop.close()
 
-async def _apagar_iphone_async(udid):
-    """Apaga el iPhone de forma asíncrona usando DiagnosticsService."""
-    lockdown_res = create_using_usbmux(serial=udid)
-    lockdown = await lockdown_res if inspect.isawaitable(lockdown_res) else lockdown_res
+async def _apagar_iphone_async(udid=None):
+    """Apaga el iPhone usando DiagnosticsService con búsqueda de serie y reintentos."""
+    target_serial = udid
     
+    # 1. Buscar el dispositivo por usbmux si no tenemos serial exacto o para refrescar socket
     try:
-        vp_res = lockdown.validate_pairing()
-        if inspect.isawaitable(vp_res):
-            await vp_res
-    except Exception:
-        pass
+        res_devs = list_devices()
+        devices = await res_devs if inspect.isawaitable(res_devs) else res_devs
+        if devices:
+            for dev in devices:
+                dev_s = getattr(dev, 'serial', None) or getattr(dev, 'serial_number', None) or getattr(dev, 'udid', str(dev))
+                if dev_s and (dev_s == udid or not target_serial):
+                    target_serial = dev_s
+                    break
+            if not target_serial and devices:
+                dev = devices[0]
+                target_serial = getattr(dev, 'serial', None) or getattr(dev, 'serial_number', None) or getattr(dev, 'udid', str(dev))
+    except Exception as e:
+        print(f"Búsqueda usbmux al apagar: {e}")
 
-    diag = DiagnosticsService(lockdown=lockdown)
-    shut_res = diag.shutdown()
-    if inspect.isawaitable(shut_res):
-        await shut_res
+    if not target_serial:
+        print("No se encontró UDID/Serial activo para apagar iPhone.")
+        return False
 
-def apagar_iphone(udid):
-    """Ejecuta _apagar_iphone_async de forma segura desde un entorno síncrono."""
-    try:
-        return asyncio.run(_apagar_iphone_async(udid))
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # 2. Intentar lockdown y apagado con reintentos
+    last_error = None
+    for intento in range(1, 4):
         try:
-            return loop.run_until_complete(_apagar_iphone_async(udid))
-        finally:
-            loop.close()
+            print(f"Intentando apagar iPhone (UDID: {target_serial}) - Intento {intento}...")
+            lockdown_res = create_using_usbmux(serial=target_serial)
+            lockdown = await lockdown_res if inspect.isawaitable(lockdown_res) else lockdown_res
+            
+            try:
+                vp_res = lockdown.validate_pairing()
+                if inspect.isawaitable(vp_res):
+                    await vp_res
+            except Exception as ep:
+                if "SessionActive" not in str(ep):
+                    print(f"Validación de pairing al apagar: {ep}")
+
+            diag = DiagnosticsService(lockdown=lockdown)
+            shut_res = diag.shutdown()
+            if inspect.isawaitable(shut_res):
+                await shut_res
+            print(f"--- ÉXITO: Comando de apagado enviado al iPhone ({target_serial}) ---")
+            return True
+        except Exception as ex:
+            last_error = ex
+            print(f"Error en intento {intento} de apagar iPhone: {ex}")
+            await asyncio.sleep(1.0)
+            
+    if last_error:
+        print(f"No se pudo apagar el iPhone tras 3 intentos: {last_error}")
+        return False
+
+def apagar_iphone(udid=None):
+    """Ejecuta _apagar_iphone_async en un hilo dedicado para no bloquear la interfaz Tkinter."""
+    def _run():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_apagar_iphone_async(udid))
+            finally:
+                loop.close()
+        except Exception as e:
+            print(f"Error en hilo de apagado iPhone: {e}")
+            
+    t = threading.Thread(target=_run)
+    t.daemon = True
+    t.start()
+
 
 
 # --- Monitor de Dispositivos Unificado (iOS + Android) ---
