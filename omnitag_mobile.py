@@ -40,7 +40,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.1"
+CURRENT_VERSION = "v4.5.2"
+
 
 
 
@@ -932,6 +933,36 @@ def obtener_info_ios_unificada():
             return loop.run_until_complete(_detectar_dispositivo_ios_async())
         finally:
             loop.close()
+
+async def _apagar_iphone_async(udid):
+    """Apaga el iPhone de forma asíncrona usando DiagnosticsService."""
+    lockdown_res = create_using_usbmux(serial=udid)
+    lockdown = await lockdown_res if inspect.isawaitable(lockdown_res) else lockdown_res
+    
+    try:
+        vp_res = lockdown.validate_pairing()
+        if inspect.isawaitable(vp_res):
+            await vp_res
+    except Exception:
+        pass
+
+    diag = DiagnosticsService(lockdown=lockdown)
+    shut_res = diag.shutdown()
+    if inspect.isawaitable(shut_res):
+        await shut_res
+
+def apagar_iphone(udid):
+    """Ejecuta _apagar_iphone_async de forma segura desde un entorno síncrono."""
+    try:
+        return asyncio.run(_apagar_iphone_async(udid))
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_apagar_iphone_async(udid))
+        finally:
+            loop.close()
+
 
 # --- Monitor de Dispositivos Unificado (iOS + Android) ---
 class UnifiedDeviceMonitor(threading.Thread):
@@ -2026,11 +2057,10 @@ class OmniTagMobileApp(customtkinter.CTk):
                     dev = adbutils.adb.device(self.current_udid)
                     dev.shell("reboot -p")
             else:
-                lockdown = create_using_usbmux(serial=self.current_udid)
-                diag = DiagnosticsService(lockdown=lockdown)
-                diag.shutdown()
+                apagar_iphone(self.current_udid)
         except Exception as e:
-            print(f"Error al apagar: {e}")
+            print(f"Error al apagar dispositivo ({self.current_udid}): {e}")
+
 
     def pegar_modelo(self):
         try:
