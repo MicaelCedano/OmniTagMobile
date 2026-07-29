@@ -24,6 +24,9 @@ import pandas as pd
 import urllib.request
 import urllib.parse
 import sys
+import asyncio
+import inspect
+
 
 # Impresión en Windows (win32print / win32api)
 WIN32PRINT_AVAILABLE = False
@@ -37,7 +40,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.9"
+CURRENT_VERSION = "v4.5.0"
+
 
 
 
@@ -846,6 +850,88 @@ class ExcelManager:
         except: pass
         return []
 
+async def _detectar_dispositivo_ios_async():
+    """Función asíncrona compatible con pymobiledevice3 v10+ y versiones anteriores."""
+    res_devs = list_devices()
+    devices = await res_devs if inspect.isawaitable(res_devs) else res_devs
+    if not devices:
+        return None
+    
+    device = devices[0]
+    udid = getattr(device, 'serial', None) or getattr(device, 'serial_number', None) or getattr(device, 'udid', str(device))
+    
+    lockdown_res = create_using_usbmux(serial=udid)
+    lockdown = await lockdown_res if inspect.isawaitable(lockdown_res) else lockdown_res
+    
+    try:
+        vp_res = lockdown.validate_pairing()
+        if inspect.isawaitable(vp_res):
+            await vp_res
+    except Exception as ep:
+        if "SessionActive" not in str(ep):
+            raise ep
+
+    async def get_val(key, domain=None):
+        kwargs = {'key': key}
+        if domain:
+            kwargs['domain'] = domain
+        r = lockdown.get_value(**kwargs)
+        if inspect.isawaitable(r):
+            return await r
+        return r
+
+    product_type = await get_val('ProductType')
+    serial_number = await get_val('SerialNumber')
+    imei = await get_val('InternationalMobileEquipmentIdentity')
+    
+    model_name = IPHONE_MODEL_MAPPING.get(product_type, "iPhone Desconocido")
+    
+    if not imei:
+        imei = await get_val('MobileEquipmentIdentifier') or await get_val('SetupIMEI') or serial_number
+        if not imei:
+            raise Exception("IMEI vacío")
+
+    capacidad = ""
+    try:
+        bytes_cap = await get_val('TotalDiskCapacity', domain='com.apple.disk_usage') or await get_val('TotalDiskCapacity')
+        if bytes_cap:
+            gb = int(bytes_cap) / 1000000000
+            closest = min([16, 32, 64, 128, 256, 512, 1024], key=lambda x: abs(x - gb))
+            capacidad = "1TB" if closest == 1024 else f"{closest}GB"
+    except Exception:
+        pass
+
+    color = ""
+    try:
+        color_hex = await get_val('DeviceColor')
+        if color_hex:
+            color = HASH_COLOR_MAP.get(str(color_hex).lower().strip(), "")
+    except Exception:
+        pass
+
+    return {
+        'udid': udid,
+        'brand': 'Apple',
+        'product_name': model_name,
+        'serial_number': serial_number,
+        'imei': imei,
+        'capacity': capacidad,
+        'color': color,
+        'is_android': False
+    }
+
+def obtener_info_ios_unificada():
+    """Ejecuta _detectar_dispositivo_ios_async de forma segura desde un entorno síncrono."""
+    try:
+        return asyncio.run(_detectar_dispositivo_ios_async())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_detectar_dispositivo_ios_async())
+        finally:
+            loop.close()
+
 # --- Monitor de Dispositivos Unificado (iOS + Android) ---
 class UnifiedDeviceMonitor(threading.Thread):
     def __init__(self, success_callback, trust_callback, disconnected_callback):
@@ -865,55 +951,18 @@ class UnifiedDeviceMonitor(threading.Thread):
             # 1. Intentar detectar iPhone por USBmux
             if PYMOBILEDEVICE_AVAILABLE:
                 try:
-                    devices = list_devices()
-                    if devices:
-                        device = devices[0]
-                        udid = device.serial
+                    info_ios = obtener_info_ios_unificada()
+                    if info_ios:
+                        udid = info_ios['udid']
                         if udid != self.last_udid:
-                            lockdown = create_using_usbmux(serial=udid)
-                            try: lockdown.validate_pairing()
-                            except Exception as ep:
-                                if "SessionActive" not in str(ep): raise ep
-                            
-                            product_type = lockdown.get_value(key='ProductType')
-                            serial_number = lockdown.get_value(key='SerialNumber')
-                            imei = lockdown.get_value(key='InternationalMobileEquipmentIdentity')
-                            model_name = IPHONE_MODEL_MAPPING.get(product_type, "iPhone Desconocido")
-                            
-                            if not imei: raise Exception("IMEI vacío")
-                            
-                            capacidad = ""
-                            try:
-                                bytes_cap = lockdown.get_value(domain='com.apple.disk_usage', key='TotalDiskCapacity') or lockdown.get_value(key='TotalDiskCapacity')
-                                if bytes_cap:
-                                    gb = int(bytes_cap) / 1000000000
-                                    closest = min([16, 32, 64, 128, 256, 512, 1024], key=lambda x: abs(x - gb))
-                                    capacidad = "1TB" if closest == 1024 else f"{closest}GB"
-                            except: pass
-
-                            color = ""
-                            try:
-                                color_hex = lockdown.get_value(key='DeviceColor')
-                                color = HASH_COLOR_MAP.get(str(color_hex).lower().strip(), "")
-                            except: pass
-
-                            info = {
-                                'udid': udid,
-                                'brand': 'Apple',
-                                'product_name': model_name,
-                                'serial_number': serial_number,
-                                'imei': imei,
-                                'capacity': capacidad,
-                                'color': color,
-                                'is_android': False
-                            }
                             self.last_udid = udid
-                            self.success_callback(info)
+                            self.success_callback(info_ios)
                         device_found = True
                 except Exception as e:
                     if "PairingDialogResponsePending" in str(e) or "PasswordProtected" in str(e):
                         self.trust_callback("iOS")
                     else: pass
+
 
             # 2. Si no hay iPhone, intentar detectar Android por ADB
             if not device_found and ADBUTILS_AVAILABLE:
