@@ -37,7 +37,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.6"
+CURRENT_VERSION = "v4.4.7"
+
 
 REPO_OWNER = "MicaelCedano"
 REPO_NAME = "OmniTagMobile"
@@ -1310,8 +1311,16 @@ class OmniTagMobileApp(customtkinter.CTk):
                 html_url = data.get("html_url", f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases")
                 changelog_text = data.get("body", "")
                 
-                self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
-                self.after(100, lambda: self.mostrar_dialogo_actualizacion(latest_version_tag, changelog_text, exe_url, exe_name, html_url))
+                self.after(100, lambda: self.btn_update.configure(text="Descargando...", fg_color="#334155", state="disabled"))
+                if exe_url:
+                    thread = threading.Thread(
+                        target=self._hilo_descarga_segundo_plano,
+                        args=(exe_url, exe_name, latest_version_tag)
+                    )
+                    thread.daemon = True
+                    thread.start()
+                else:
+                    self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
             else:
                 self.after(100, lambda: self.btn_update.configure(text="Al día", fg_color="#10B981", state="normal"))
                 if manual:
@@ -1323,6 +1332,34 @@ class OmniTagMobileApp(customtkinter.CTk):
                 self.after(200, lambda: messagebox.showerror("Error", f"No se pudo buscar actualizaciones:\n{e}"))
         finally:
             self.after(900000, lambda: self.chequear_actualizaciones_async(manual=False))
+
+    def _hilo_descarga_segundo_plano(self, exe_url, exe_name, nueva_version):
+        """Descarga la nueva versión en segundo plano sin interrumpir al usuario."""
+        try:
+            current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+            exe_dir = os.path.dirname(current_exe)
+            new_exe = os.path.join(exe_dir, f"{exe_name}.new")
+            
+            req = urllib.request.Request(
+                exe_url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            
+            with urllib.request.urlopen(req, timeout=60) as response:
+                with open(new_exe, 'wb') as f:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            
+            self.update_ready = True
+            self.downloaded_new_exe = new_exe
+            self.after(100, lambda: self.btn_update.configure(text="¡Instalar act.!", fg_color="#EF4444", state="normal"))
+        except Exception as e:
+            print(f"Error descargando actualización en segundo plano: {e}")
+            self.after(100, lambda: self.btn_update.configure(text="¡Nueva act.!", fg_color="#EF4444", state="normal"))
+
 
     def mostrar_dialogo_actualizacion(self, nueva_version, changelog, exe_url, exe_name, html_url):
         """Muestra el diálogo con la nueva versión y changelog (estilo MCTools)."""
@@ -1433,11 +1470,12 @@ class OmniTagMobileApp(customtkinter.CTk):
             with open(bat_path, 'w', newline='') as f:
                 f.write(bat_content)
 
-            # 2. Crear VBS que lanza el batch oculto (sin consola)
+            # 2. Crear VBS que lanza el batch oculto (sin consola, con soporte para rutas con espacios)
             vbs_path = os.path.join(exe_dir, "_update_helper.vbs")
-            vbs_code = 'CreateObject("WScript.Shell").Run "' + bat_path + '", 0, False'
+            vbs_code = 'CreateObject("WScript.Shell").Run chr(34) & "' + bat_path + '" & chr(34), 0, False'
             with open(vbs_path, 'w', newline='') as f:
                 f.write(vbs_code)
+
 
             # 3. Lanzar VBS con wscript.exe (invisible)
             subprocess.Popen(

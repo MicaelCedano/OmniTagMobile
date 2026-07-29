@@ -53,12 +53,13 @@ def main():
         with open(bat_path, 'w', newline='\r\n') as f:
             f.write(bat_content)
 
-        # Crear VBS para lanzar el batch oculto
+        # Crear VBS para lanzar el batch oculto (con soporte para rutas con espacios)
         vbs_path = os.path.join(exe_dir, "_update_helper.vbs")
-        vbs_code = 'CreateObject("WScript.Shell").Run "' + bat_path + '", 0, False'
+        vbs_code = 'CreateObject("WScript.Shell").Run chr(34) & "' + bat_path + '" & chr(34), 0, False'
 
         with open(vbs_path, 'w', newline='\r\n') as f:
             f.write(vbs_code)
+
 
         # Lanzar VBS con wscript.exe (invisible, sin consola)
         subprocess.Popen(
