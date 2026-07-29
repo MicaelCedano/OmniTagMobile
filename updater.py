@@ -1,79 +1,221 @@
 # -*- coding: utf-8 -*-
 """
-OmniTag Updater - Helper Silencioso de Actualizaciones (v2 - Batch Helper Pattern)
-Autor: Micael Cedano / Kiwi
-
-Usa el patrón batch helper + VBS validado en MCTools:
-1. Espera a que el proceso principal cierre
-2. Reemplaza el .exe con move /Y (atómico, sin locks)
-3. Relanza la app
-4. Se auto-elimina
-
-Uso:
-    updater.exe --new <ruta_nuevo_exe> --target <ruta_exe_actual>
+OmniTag Mobile Updater - Asistente de Actualización Independiente (MCTools Pattern)
+Permite reemplazar OmniTagMobile.exe por una nueva versión descargada sin conflictos de archivo bloqueado.
 """
 import sys
 import os
 import time
+import argparse
 import subprocess
-import tempfile
+import shutil
+import ctypes
+import tkinter as tk
+from tkinter import ttk, messagebox
 
-def main():
-    if "--new" in sys.argv and "--target" in sys.argv:
-        # Modo CLI: lanzado desde omnitag_mobile.py
-        new_idx = sys.argv.index("--new")
-        target_idx = sys.argv.index("--target")
-        new_exe = os.path.abspath(sys.argv[new_idx + 1])
-        target_exe = os.path.abspath(sys.argv[target_idx + 1])
+def is_pid_running(pid):
+    """Comprueba si un proceso con el PID dado sigue activo en Windows."""
+    if pid <= 0:
+        return False
+    try:
+        PROCESS_QUERY_INFORMATION = 0x0400
+        SYNCHRONIZE = 0x0010
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            DWORD = ctypes.c_ulong
+            exit_code = DWORD()
+            STILL_ACTIVE = 259
+            if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == STILL_ACTIVE
+            return False
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return False
 
-        # Crear batch helper
-        exe_name = os.path.basename(target_exe)
-        exe_dir = os.path.dirname(target_exe)
-        exe_short = exe_name.replace('.exe', '')
+class UpdaterApp:
+    def __init__(self, root, target, source, pid, launch):
+        self.root = root
+        self.target = target
+        self.source = source
+        self.pid = pid
+        self.launch = launch
 
-        bat_path = os.path.join(exe_dir, "_update_helper.bat")
+        self.root.title("Actualizador OmniTag Mobile")
+        self.root.geometry("420x200")
+        self.root.resizable(False, False)
+        self.root.configure(bg="#0F172A")
 
-        bat_lines = [
-            "@echo off",
-            "chcp 65001 >nul 2>&1",
-            "",
-            ":wait",
-            "ping 127.0.0.1 -n 2 >nul",
-            'tasklist /FI "IMAGENAME eq ' + exe_name + '" 2>nul | find /I "' + exe_short + '" >nul',
-            "if not errorlevel 1 goto wait",
-            "",
-            'move /Y "' + new_exe + '" "' + target_exe + '" >nul 2>&1',
-            "",
-            'start "" "' + target_exe + '"',
-            "",
-            '(goto) 2>nul & del "%~f0" >nul 2>&1',
-        ]
-        bat_content = "\r\n".join(bat_lines)
+        # Centrar ventana
+        self.root.update_idletasks()
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.root.winfo_screenheight() // 2) - (height // 2)
+        self.root.geometry(f'{width}x{height}+{x}+{y}')
 
-        with open(bat_path, 'w', newline='\r\n') as f:
-            f.write(bat_content)
+        # Icono si existe
+        icon_path = "app_icon.ico"
+        icon_png = "logo.png"
+        if getattr(sys, 'frozen', False):
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+            icon_path = os.path.join(base_dir, "app_icon.ico")
+            icon_png = os.path.join(base_dir, "logo.png")
+        if os.path.exists(icon_path):
+            try:
+                self.root.iconbitmap(icon_path)
+            except Exception:
+                pass
+        if os.path.exists(icon_png):
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(icon_png)
+                self._icon_photo = ImageTk.PhotoImage(img)
+                self.root.iconphoto(True, self._icon_photo)
+            except Exception:
+                pass
 
-        # Crear VBS para lanzar el batch oculto (con soporte para rutas con espacios)
-        vbs_path = os.path.join(exe_dir, "_update_helper.vbs")
-        vbs_code = 'CreateObject("WScript.Shell").Run chr(34) & "' + bat_path + '" & chr(34), 0, False'
+        # Frame contenedor
+        container = tk.Frame(root, bg="#0F172A", padx=20, pady=20)
+        container.pack(fill="both", expand=True)
 
-        with open(vbs_path, 'w', newline='\r\n') as f:
-            f.write(vbs_code)
+        # Título
+        title_label = tk.Label(
+            container, 
+            text="Actualizando OmniTag Mobile", 
+            font=("Segoe UI", 14, "bold"), 
+            fg="#F8FAFC", 
+            bg="#0F172A"
+        )
+        title_label.pack(anchor="w", pady=(0, 10))
 
+        # Mensaje de estado
+        self.status_label = tk.Label(
+            container, 
+            text="Iniciando proceso de actualización...", 
+            font=("Segoe UI", 10), 
+            fg="#94A3B8", 
+            bg="#0F172A",
+            anchor="w"
+        )
+        self.status_label.pack(fill="x", pady=(0, 15))
 
-        # Lanzar VBS con wscript.exe (invisible, sin consola)
-        subprocess.Popen(
-            ['wscript.exe', vbs_path],
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-            close_fds=True
+        # Estilo para ProgressBar
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure(
+            "Custom.Horizontal.TProgressbar", 
+            thickness=10, 
+            troughcolor="#1E293B", 
+            background="#6366F1", 
+            bordercolor="#0F172A", 
+            lightcolor="#6366F1", 
+            darkcolor="#6366F1"
         )
 
-        # El batch helper se encarga del resto. Salir limpiamente.
-        sys.exit(0)
+        # Barra de progreso
+        self.progress = ttk.Progressbar(
+            container, 
+            style="Custom.Horizontal.TProgressbar", 
+            orient="horizontal", 
+            mode="determinate"
+        )
+        self.progress.pack(fill="x", pady=(0, 15))
+        self.progress["value"] = 0
 
-    else:
-        print("Uso: updater.exe --new <ruta_nuevo> --target <ruta_actual>")
-        sys.exit(1)
+        # Subtexto de información
+        self.sub_label = tk.Label(
+            container, 
+            text="Por favor espere mientras se reemplaza la versión anterior.", 
+            font=("Segoe UI", 8), 
+            fg="#64748B", 
+            bg="#0F172A",
+            anchor="w"
+        )
+        self.sub_label.pack(fill="x")
+
+        # Iniciar proceso tras renderizar ventana
+        self.root.after(300, self.run_update)
+
+    def set_status(self, text, progress_val):
+        self.status_label.configure(text=text)
+        self.progress["value"] = progress_val
+        self.root.update_idletasks()
+
+    def run_update(self):
+        try:
+            # Paso 1: Esperar a que el proceso anterior finalice
+            if self.pid > 0:
+                self.set_status("Esperando que OmniTag Mobile se cierre...", 15)
+                max_wait = 15.0  # segundos máximos
+                start_time = time.time()
+                while is_pid_running(self.pid):
+                    time.sleep(0.3)
+                    if time.time() - start_time > max_wait:
+                        try:
+                            subprocess.run(["taskkill", "/F", "/PID", str(self.pid)], capture_output=True)
+                        except Exception:
+                            pass
+                        break
+
+            # Breve pausa para asegurar liberación de handles por el SO
+            self.set_status("Preparando reemplazo de archivos...", 35)
+            time.sleep(0.5)
+
+            # Paso 2: Reemplazar el ejecutable destino
+            if not os.path.exists(self.source):
+                raise FileNotFoundError(f"No se encontró el archivo fuente descargado:\n{self.source}")
+
+            self.set_status("Instalando nueva versión...", 60)
+            
+            copied = False
+            last_error = None
+            for attempt in range(12):
+                try:
+                    shutil.copy2(self.source, self.target)
+                    copied = True
+                    break
+                except Exception as e:
+                    last_error = e
+                    time.sleep(0.5)
+
+            if not copied:
+                raise RuntimeError(f"No se pudo reemplazar {self.target}:\n{last_error}")
+
+            self.set_status("Limpiando archivos temporales...", 85)
+            try:
+                if os.path.exists(self.source):
+                    os.remove(self.source)
+            except Exception:
+                pass
+
+            self.set_status("¡Actualización completada! Iniciando OmniTag Mobile...", 100)
+            time.sleep(0.5)
+
+            # Paso 3: Ejecutar la aplicación actualizada si se especificó launch
+            if self.launch and os.path.exists(self.target):
+                subprocess.Popen([self.target])
+
+            self.root.after(300, self.root.destroy)
+
+        except Exception as e:
+            messagebox.showerror("Error de Actualización", f"Ocurrió un error al instalar la actualización:\n{e}")
+            self.root.destroy()
+
+def main():
+    parser = argparse.ArgumentParser(description="OmniTag Mobile Standalone Updater")
+    parser.add_argument("--target", required=True, help="Ruta al ejecutable objetivo OmniTagMobile.exe")
+    parser.add_argument("--source", required=True, help="Ruta al archivo ejecutable descargado")
+    parser.add_argument("--pid", type=int, default=0, help="PID del proceso OmniTagMobile a esperar")
+    parser.add_argument("--launch", action="store_true", default=True, help="Iniciar app después de actualizar")
+
+    args = parser.parse_args()
+
+    root = tk.Tk()
+    app = UpdaterApp(root, target=args.target, source=args.source, pid=args.pid, launch=args.launch)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()

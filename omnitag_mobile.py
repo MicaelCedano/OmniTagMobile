@@ -37,7 +37,8 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.4.7"
+CURRENT_VERSION = "v4.4.8"
+
 
 
 REPO_OWNER = "MicaelCedano"
@@ -1435,59 +1436,117 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.btn_update.configure(text="Buscar act.", fg_color=COLOR_ACCENT_SECONDARY, state="normal")
 
     def ejecutar_instalacion_inmediata(self):
+        """Ejecuta la sustitución del ejecutable utilizando el actualizador independiente (updater.exe)."""
         if not hasattr(self, 'downloaded_new_exe') or not self.downloaded_new_exe or not os.path.exists(self.downloaded_new_exe):
             messagebox.showerror("Error", "No se encontró el archivo de actualización listo para instalar.")
             return
             
         try:
             current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+            temp_dir = tempfile.gettempdir()
             new_exe = self.downloaded_new_exe
-            exe_dir = os.path.dirname(current_exe)
-            exe_name = os.path.basename(current_exe)
-            exe_short = exe_name.replace('.exe', '')
+            current_pid = os.getpid()
+            
+            updater_exe_name = "updater.exe"
+            updater_found = None
+            
+            # 1. Buscar updater.exe en bundle PyInstaller o directorio de instalación
+            if getattr(sys, 'frozen', False):
+                base_dir = getattr(sys, '_MEIPASS', os.path.dirname(current_exe))
+                candidates = [
+                    os.path.join(base_dir, updater_exe_name),
+                    os.path.join(os.path.dirname(current_exe), updater_exe_name),
+                    os.path.join(os.getcwd(), updater_exe_name)
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        updater_found = cand
+                        break
+            else:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                candidates = [
+                    os.path.join(script_dir, updater_exe_name),
+                    os.path.join(script_dir, "dist", updater_exe_name),
+                    os.path.join(os.getcwd(), "dist", updater_exe_name)
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        updater_found = cand
+                        break
 
-            if self.device_monitor: self.device_monitor.stop()
+            if updater_found:
+                # Copiar updater.exe a temp_dir para evitar bloqueos en el directorio original
+                temp_updater = os.path.join(temp_dir, "omnitag_updater.exe")
+                try:
+                    import shutil
+                    shutil.copy2(updater_found, temp_updater)
+                    updater_cmd_path = temp_updater
+                except Exception:
+                    updater_cmd_path = updater_found
 
-            # --- Batch helper pattern (validado en MCTools) ---
-            # 1. Crear batch que espera a que este proceso muera, reemplaza y relanza
-            bat_path = os.path.join(exe_dir, "_update_helper.bat")
+                cmd = [
+                    updater_cmd_path,
+                    "--target", current_exe,
+                    "--source", new_exe,
+                    "--pid", str(current_pid)
+                ]
+                subprocess.Popen(cmd)
+            else:
+                # Si estamos en modo desarrollo o updater.exe no está compilado, intentar ejecutar updater.py
+                script_dir = os.path.dirname(os.path.abspath(__file__)) if not getattr(sys, 'frozen', False) else os.path.dirname(current_exe)
+                updater_py = os.path.join(script_dir, "updater.py")
+                if os.path.exists(updater_py):
+                    cmd = [
+                        sys.executable,
+                        updater_py,
+                        "--target", current_exe,
+                        "--source", new_exe,
+                        "--pid", str(current_pid)
+                    ]
+                    subprocess.Popen(cmd)
+                else:
+                    # Respaldo secundario mediante batch script
+                    self._ejecutar_instalacion_bat_fallback(current_exe, new_exe, temp_dir)
+                    return
+
+            time.sleep(0.3)
+            os._exit(0)
+        except Exception as e:
+            messagebox.showerror("Error de Instalación", f"No se pudo iniciar el actualizador (updater.exe):\n{e}")
+
+    def _ejecutar_instalacion_bat_fallback(self, current_exe, new_exe, temp_dir):
+        """Respaldo secundario mediante batch script en caso de no contar con updater.exe."""
+        try:
+            bat_path = os.path.join(temp_dir, "omnitag_updater.bat")
+            vbs_path = os.path.join(temp_dir, "omnitag_launcher.vbs")
+            exe_basename = os.path.basename(current_exe)
             bat_lines = [
                 "@echo off",
-                "chcp 65001 >nul 2>&1",
-                "",
-                ":wait",
+                ":wait_exit",
                 "ping 127.0.0.1 -n 2 >nul",
-                'tasklist /FI "IMAGENAME eq ' + exe_name + '" 2>nul | find /I "' + exe_short + '" >nul',
-                "if not errorlevel 1 goto wait",
-                "",
-                'move /Y "' + new_exe + '" "' + current_exe + '" >nul 2>&1',
-                "",
-                'start "" "' + current_exe + '"',
-                "",
-                '(goto) 2>nul & del "%~f0" >nul 2>&1',
+                f'tasklist /FI "IMAGENAME eq {exe_basename}" 2>nul | find /I "{exe_basename}" >nul',
+                "if not errorlevel 1 goto wait_exit",
+                "ping 127.0.0.1 -n 3 >nul",
+                ":retry_copy",
+                f'copy /Y "{new_exe}" "{current_exe}" >nul 2>&1 || goto retry_copy',
+                "ping 127.0.0.1 -n 2 >nul",
+                f'start "" "{current_exe}"',
+                "ping 127.0.0.1 -n 2 >nul",
+                f'if exist "{vbs_path}" del /F /Q "{vbs_path}" >nul 2>&1',
+                f'if exist "{new_exe}" del /F /Q "{new_exe}" >nul 2>&1',
+                '(goto) 2>nul & del "%~f0" >nul 2>&1'
             ]
-            bat_content = (chr(13)+chr(10)).join(bat_lines)
-            with open(bat_path, 'w', newline='') as f:
-                f.write(bat_content)
-
-            # 2. Crear VBS que lanza el batch oculto (sin consola, con soporte para rutas con espacios)
-            vbs_path = os.path.join(exe_dir, "_update_helper.vbs")
-            vbs_code = 'CreateObject("WScript.Shell").Run chr(34) & "' + bat_path + '" & chr(34), 0, False'
-            with open(vbs_path, 'w', newline='') as f:
+            with open(bat_path, 'w', encoding='cp1252') as f:
+                f.write("\r\n".join(bat_lines))
+            vbs_code = f'CreateObject("WScript.Shell").Run Chr(34) & "{bat_path}" & Chr(34), 0, False'
+            with open(vbs_path, 'w', encoding='cp1252') as f:
                 f.write(vbs_code)
-
-
-            # 3. Lanzar VBS con wscript.exe (invisible)
-            subprocess.Popen(
-                ['wscript.exe', vbs_path],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-                close_fds=True
-            )
-
-            # 4. Cerrar esta instancia — el batch helper se encarga del resto
+            subprocess.Popen(['wscript.exe', vbs_path])
+            time.sleep(0.3)
             os._exit(0)
         except Exception as e:
             messagebox.showerror("Error de Instalación", f"No se pudo iniciar la actualización:\n{e}")
+
 
     # --- UI Base ---
     def _setup_ui(self):

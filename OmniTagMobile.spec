@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('arial.ttf', '.'), ('arialbd.ttf', '.'), ('etiqueta_config.json', '.'), ('plantilla_compra_iphone.xlsx', '.')]
+datas = [('arial.ttf', '.'), ('arialbd.ttf', '.'), ('etiqueta_config.json', '.'), ('plantilla_compra_iphone.xlsx', '.'), ('dist/updater.exe', '.')]
+
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')
