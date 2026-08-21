@@ -40,7 +40,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.5"
+CURRENT_VERSION = "v4.5.7"
 
 
 
@@ -805,6 +805,8 @@ def _generar_etiqueta_pdf_temporal(modelo, numero_serie, especificacion, path_lo
 
 # --- Manejador Excel ---
 class ExcelManager:
+    COLUMNAS_BASE = ["IMEI", "Marca", "Modelo"]
+
     def __init__(self, filepath):
         self.filepath = filepath
         self.ensure_file_exists()
@@ -816,12 +818,12 @@ class ExcelManager:
     def ensure_file_exists(self):
         if not os.path.exists(self.filepath):
             try:
-                df = pd.DataFrame(columns=["IMEI", "Modelo"])
+                df = pd.DataFrame(columns=self.COLUMNAS_BASE)
                 df.to_excel(self.filepath, index=False)
             except Exception as e:
                 print(f"Error creando Excel: {e}")
 
-    def registrar_dispositivo(self, imei, modelo_completo):
+    def registrar_dispositivo(self, imei, modelo_completo, marca=""):
         try:
             # Validar formato IMEI (14-16 dígitos)
             imei_str = str(imei).strip()
@@ -830,13 +832,20 @@ class ExcelManager:
                 return False, f"IMEI inválido: {imei_str} (menos de 14 dígitos)", -1
             
             try: df = pd.read_excel(self.filepath)
-            except FileNotFoundError: df = pd.DataFrame(columns=["IMEI", "Modelo"])
+            except FileNotFoundError: df = pd.DataFrame(columns=self.COLUMNAS_BASE)
+
+            if "Marca" not in df.columns:
+                df["Marca"] = ""
+            if "Modelo" not in df.columns:
+                df["Modelo"] = ""
+            columnas = self.COLUMNAS_BASE + [c for c in df.columns if c not in self.COLUMNAS_BASE]
+            df = df.reindex(columns=columnas)
             
             df['IMEI'] = df['IMEI'].astype(str)
             if imei_str in df['IMEI'].values:
                 return False, f"El IMEI {imei} ya está registrado.", len(df)
 
-            new_row = pd.DataFrame([{"IMEI": str(imei), "Modelo": modelo_completo}])
+            new_row = pd.DataFrame([{"IMEI": str(imei), "Marca": str(marca).strip(), "Modelo": modelo_completo}])
             df = pd.concat([df, new_row], ignore_index=True)
             df.to_excel(self.filepath, index=False)
             return True, "Registrado en Excel.", len(df)
@@ -848,6 +857,8 @@ class ExcelManager:
     def actualizar_registro(self, imei, nuevo_modelo):
         try:
             df = pd.read_excel(self.filepath)
+            if "Marca" not in df.columns:
+                df["Marca"] = ""
             df['IMEI'] = df['IMEI'].astype(str)
             imei_str = str(imei)
             if imei_str in df['IMEI'].values:
@@ -1906,10 +1917,12 @@ class OmniTagMobileApp(customtkinter.CTk):
         style.map('Treeview', background=[('selected', '#4F46E5')], foreground=[('selected', '#FFFFFF')])
         style.configure("Treeview.Heading", background="#334155", foreground="#F8FAFC", borderwidth=0, font=('Segoe UI', 10, 'bold'))
         
-        self.tree = ttk.Treeview(table_container, columns=("IMEI", "Modelo"), show="headings", style="Treeview")
+        self.tree = ttk.Treeview(table_container, columns=("IMEI", "Marca", "Modelo"), show="headings", style="Treeview")
         self.tree.heading("IMEI", text="IMEI")
+        self.tree.heading("Marca", text="Marca")
         self.tree.heading("Modelo", text="Modelo del Dispositivo")
         self.tree.column("IMEI", width=140, anchor="center")
+        self.tree.column("Marca", width=100, anchor="w")
         self.tree.column("Modelo", width=250, anchor="w")
         
         self.tree.tag_configure("evenrow", background="#1E293B")
@@ -1942,7 +1955,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         item_values = self.tree.item(selected_item[0], 'values')
         if not item_values: return
         
-        imei_val, current_model = item_values[0], item_values[1]
+        imei_val, current_brand, current_model = item_values[0], item_values[1], item_values[2]
         dialog = customtkinter.CTkInputDialog(text=f"Editar Modelo para IMEI {imei_val}:", title="Editar Modelo")
         new_model = dialog.get_input()
         
@@ -1969,7 +1982,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         filepath = filedialog.asksaveasfilename(title="Crear Nuevo Proyecto Excel", defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")], initialdir=script_dir)
         if filepath:
             try:
-                df = pd.DataFrame(columns=["IMEI", "Modelo"])
+                df = pd.DataFrame(columns=["IMEI", "Marca", "Modelo"])
                 df.to_excel(filepath, index=False)
                 self._cambiar_archivo_excel(filepath)
                 messagebox.showinfo("Proyecto Nuevo", f"Creado: {os.path.basename(filepath)}")
@@ -2005,10 +2018,11 @@ class OmniTagMobileApp(customtkinter.CTk):
         visible_count = 0
         for reg in registros:
             val_imei = str(reg.get("IMEI", "")).replace("nan", "")
+            val_brand = str(reg.get("Marca", "")).replace("nan", "")
             val_mod = str(reg.get("Modelo", "")).replace("nan", "")
-            if query and (query not in val_imei.lower() and query not in val_mod.lower()): continue
+            if query and (query not in val_imei.lower() and query not in val_brand.lower() and query not in val_mod.lower()): continue
             row_tag = "evenrow" if visible_count % 2 == 0 else "oddrow"
-            self.tree.insert("", "end", values=(val_imei, val_mod), tags=(row_tag,))
+            self.tree.insert("", "end", values=(val_imei, val_brand, val_mod), tags=(row_tag,))
             visible_count += 1
             
         if self.count_label:
@@ -2229,6 +2243,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.trust_window = None
 
     def _update_ui_from_device(self, info):
+        brand = info.get('brand', '')
         model_name = info.get('product_name', 'Dispositivo')
         imei = info.get('imei') or info.get('serial_number') or ""
         capacidad = info.get('capacity', '')
@@ -2242,7 +2257,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.imei_var.set(imei)
         
         if imei:
-            exito, msg, count = self.excel_manager.registrar_dispositivo(imei, full_model_text)
+            exito, msg, count = self.excel_manager.registrar_dispositivo(imei, full_model_text, brand)
             if exito:
                 if count >= 0: self.count_label.configure(text=f"Registrados: {count}", text_color="#10B981")
                 self.after(0, self.refresh_excel_table)
