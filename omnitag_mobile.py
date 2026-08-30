@@ -302,6 +302,20 @@ def resolver_nombre_android(brand, model_code, dev=None):
         
     return f"{brand} {model_upper}"
 
+
+def quitar_marca_repetida_del_modelo(modelo, marca):
+    """Mantiene Marca y Modelo separados en el registro de Excel/UI."""
+    modelo = str(modelo or "").strip()
+    marca = str(marca or "").strip()
+    if not modelo or not marca:
+        return modelo
+
+    # Solo quitamos la marca cuando aparece al inicio; no alteramos nombres
+    # legítimos de modelos de otras marcas ni texto interno del modelo.
+    if marca.casefold() in {"samsung", "google"}:
+        return re.sub(rf"^{re.escape(marca)}\s+", "", modelo, count=1, flags=re.IGNORECASE).strip()
+    return modelo
+
 INT_COLOR_MAP = {
     "1": "Black", "2": "White", "3": "Gold", "4": "Rose Gold", 
     "5": "Jet Black", "6": "Red", "7": "Silver"
@@ -2250,6 +2264,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         color = info.get('color', '')
         
         self.current_udid = info.get('udid')
+        model_name = quitar_marca_repetida_del_modelo(model_name, brand)
         full_model_text = f"{model_name} {color} {capacidad}".strip()
         while "  " in full_model_text: full_model_text = full_model_text.replace("  ", " ")
 
