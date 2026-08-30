@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.4.0 (Detección Exhaustiva de SumatraPDF desde Registro/Rutas/PATH - Estilo MCTools)
+Versión: 4.5.8 (Marca separada del modelo para Samsung y Google)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -40,7 +40,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.7"
+CURRENT_VERSION = "v4.5.8"
 
 
 
