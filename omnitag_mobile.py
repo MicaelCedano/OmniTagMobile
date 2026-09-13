@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OmniTag Mobile - Generador de Etiquetas y Registro Automático Multimarca
-Versión: 4.5.8 (Marca separada del modelo para Samsung y Google)
+Versión: 4.5.9 (Detección de iPad y conservación del modelo manual)
 Autor: Micael Cedano
 """
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -40,7 +40,7 @@ except Exception:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='pymobiledevice3')
 
-CURRENT_VERSION = "v4.5.8"
+CURRENT_VERSION = "v4.5.9"
 
 
 
@@ -134,6 +134,13 @@ try:
 except Exception as e:
     print(f"ADVERTENCIA: pymobiledevice3 no disponible: {e}")
 
+try:
+    # pymobiledevice3 mantiene una base de dispositivos Apple mucho mas amplia
+    # que nuestro mapa historico de iPhone (incluye iPad y modelos recientes).
+    from pymobiledevice3.irecv_devices import IRECV_DEVICES
+except Exception:
+    IRECV_DEVICES = ()
+
 # --- Dependencias Android (adbutils) ---
 ADBUTILS_AVAILABLE = False
 try:
@@ -178,6 +185,29 @@ IPHONE_MODEL_MAPPING = {
     "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max", "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus",
     "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max", "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone 17 Plus",
 }
+
+APPLE_MODEL_MAPPING = {
+    device.product_type: device.display_name
+    for device in IRECV_DEVICES
+    if getattr(device, "product_type", None) and getattr(device, "display_name", None)
+}
+
+
+def resolver_nombre_apple(product_type, device_class=""):
+    """Resuelve iPhone/iPad sin etiquetar todos los Apple desconocidos como iPhone."""
+    product_type = str(product_type or "").strip()
+    device_class = str(device_class or "").strip()
+
+    model_name = IPHONE_MODEL_MAPPING.get(product_type) or APPLE_MODEL_MAPPING.get(product_type)
+    if model_name:
+        return model_name
+
+    family = device_class or re.sub(r"\d.*$", "", product_type)
+    if family.lower() == "ipad":
+        return "iPad Desconocido"
+    if family.lower() == "iphone":
+        return "iPhone Desconocido"
+    return f"{family} Desconocido" if family else "Dispositivo Apple Desconocido"
 
 # --- Mapeo Inteligente por Prefijos para Samsung (Incluye S25 Series) ---
 SAMSUNG_BASE_MAPPING = {
@@ -944,10 +974,14 @@ async def _detectar_dispositivo_ios_async():
         return r
 
     product_type = await get_val('ProductType')
+    try:
+        device_class = await get_val('DeviceClass')
+    except Exception:
+        device_class = ""
     serial_number = await get_val('SerialNumber')
     imei = await get_val('InternationalMobileEquipmentIdentity')
     
-    model_name = IPHONE_MODEL_MAPPING.get(product_type, "iPhone Desconocido")
+    model_name = resolver_nombre_apple(product_type, device_class)
     
     if not imei:
         imei = await get_val('MobileEquipmentIdentifier') or await get_val('SetupIMEI') or serial_number
@@ -1334,6 +1368,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         self.trust_window = None
         self.current_udid = None
         self.current_device_info = None
+        self._manual_model_overrides = {}
         
         # Establecer Ícono .ICO en la Ventana de Windows
         app_icon_p = _get_asset_path("app_icon.ico")
@@ -1754,6 +1789,7 @@ class OmniTagMobileApp(customtkinter.CTk):
         
         self.modelo_entry = customtkinter.CTkEntry(modelo_entry_frame, textvariable=self.modelo_var, placeholder_text="Ej: Samsung S23 Ultra Black 256GB", fg_color="#0F172A", border_color=COLOR_CARD_BORDER, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=32)
         self.modelo_entry.grid(row=0, column=0, padx=(0,5), sticky="ew")
+        self.modelo_entry.bind("<KeyRelease>", lambda _event: self._guardar_modelo_manual())
         
         btn_paste_model = customtkinter.CTkButton(modelo_entry_frame, text="Pegar", width=55, command=self.pegar_modelo, fg_color=COLOR_ACCENT_SECONDARY, hover_color=COLOR_ACCENT_SECONDARY_HOVER, corner_radius=8, height=32)
         btn_paste_model.grid(row=0, column=1)
@@ -2185,7 +2221,16 @@ class OmniTagMobileApp(customtkinter.CTk):
                 texto_limpio = re.sub(r'\s+', ' ', contenido.strip())
                 self.modelo_entry.delete(0, tk.END)
                 self.modelo_entry.insert(0, texto_limpio)
+                self._guardar_modelo_manual(texto_limpio)
         except tk.TclError: pass
+
+    def _guardar_modelo_manual(self, modelo=None):
+        """Conserva la correccion manual aunque el dispositivo se vuelva a detectar."""
+        info = self.current_device_info or {}
+        device_key = info.get('udid') or info.get('imei') or info.get('serial_number')
+        modelo = (modelo if modelo is not None else self.modelo_var.get()).strip()
+        if device_key and modelo:
+            self._manual_model_overrides[str(device_key)] = modelo
 
     def pegar_imei(self):
         try:
@@ -2265,8 +2310,13 @@ class OmniTagMobileApp(customtkinter.CTk):
         
         self.current_udid = info.get('udid')
         model_name = quitar_marca_repetida_del_modelo(model_name, brand)
-        full_model_text = f"{model_name} {color} {capacidad}".strip()
-        while "  " in full_model_text: full_model_text = full_model_text.replace("  ", " ")
+        device_key = info.get('udid') or info.get('imei') or info.get('serial_number')
+        manual_model = self._manual_model_overrides.get(str(device_key), "") if device_key else ""
+        if manual_model:
+            full_model_text = manual_model
+        else:
+            full_model_text = f"{model_name} {color} {capacidad}".strip()
+            while "  " in full_model_text: full_model_text = full_model_text.replace("  ", " ")
 
         self.modelo_var.set(full_model_text)
         self.imei_var.set(imei)
